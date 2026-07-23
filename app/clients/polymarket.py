@@ -129,6 +129,28 @@ def normalize_holder(raw: dict) -> dict:
     }
 
 
+def _flatten_holders(data: Any) -> list[dict]:
+    """Normalize the several shapes the Data API /holders endpoint returns.
+
+    Seen in the wild:
+      * ``[{"token": "...", "holders": [ {proxyWallet, amount}, ... ]}, ...]``  (per-token groups)
+      * ``{"holders": [ ... ]}``
+      * a bare ``[ {proxyWallet, amount}, ... ]``
+    Returns a flat list of holder dicts.
+    """
+    if data is None:
+        return []
+    if isinstance(data, dict):
+        data = data.get("holders", [])
+    out: list[dict] = []
+    for item in data or []:
+        if isinstance(item, dict) and isinstance(item.get("holders"), list):
+            out.extend(item["holders"])
+        elif isinstance(item, dict):
+            out.append(item)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Client interface + live implementation
 # --------------------------------------------------------------------------- #
@@ -235,9 +257,7 @@ class LivePolymarketClient(BasePolymarketClient):
     async def get_holders(self, condition_id: str, limit: int = 50) -> list[dict]:
         params = {"market": condition_id, "limit": limit}
         data = await self._get(f"{self.cfg.data_api_url}/holders", params)
-        # Data API may return {"holders": [...]} or a bare list depending on version.
-        rows = data.get("holders", data) if isinstance(data, dict) else data
-        return [normalize_holder(h) for h in (rows or [])]
+        return [normalize_holder(h) for h in _flatten_holders(data)]
 
     async def get_price(self, token_id: str, side: str = "buy") -> float | None:
         params = {"token_id": token_id, "side": side}

@@ -93,7 +93,11 @@ class PriceStreamer:
         ssl_ctx = self._ssl_context()
         while not stop.is_set():
             try:
-                async with websockets.connect(self.cfg.ws_url, ping_interval=20, ssl=ssl_ctx) as ws:
+                # Polymarket sends a large initial book snapshot for many assets;
+                # raise the read limit well above the 1 MB default to avoid 1009.
+                async with websockets.connect(
+                    self.cfg.ws_url, ping_interval=20, ssl=ssl_ctx, max_size=32 * 1024 * 1024
+                ) as ws:
                     await ws.send(json.dumps({"assets_ids": self._assets, "type": "market"}))
                     log.info("PriceStreamer: subscribed to %d assets (live)", len(self._assets))
                     async for raw in ws:

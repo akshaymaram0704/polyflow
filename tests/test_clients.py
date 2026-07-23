@@ -45,6 +45,20 @@ def test_normalize_holder(raw_samples):
     assert h["amount"] == 1000.0
 
 
+def test_flatten_holders_shapes():
+    from app.clients.polymarket import _flatten_holders
+
+    # per-token groups with nested "holders" (the live Data API shape)
+    grouped = [{"token": "1", "holders": [{"proxyWallet": "0xa", "amount": 5}]},
+               {"token": "2", "holders": [{"proxyWallet": "0xb", "amount": 3}]}]
+    assert [h["proxyWallet"] for h in _flatten_holders(grouped)] == ["0xa", "0xb"]
+    # dict with holders
+    assert _flatten_holders({"holders": [{"proxyWallet": "0xc"}]})[0]["proxyWallet"] == "0xc"
+    # bare list
+    assert _flatten_holders([{"proxyWallet": "0xd"}])[0]["proxyWallet"] == "0xd"
+    assert _flatten_holders(None) == []
+
+
 def test_normalize_market_defensive_on_missing_fields():
     m = normalize_market({})
     assert m["outcomes"] == [] and m["volume"] == 0.0

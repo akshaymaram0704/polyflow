@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients.polymarket import get_client
 from app.config import settings
 from app.db.base import utcnow
-from app.db.models import Market, Trader, TraderPosition
+from app.db.models import Market, Trade, Trader, TraderPosition
 from app.logging import get_logger
 
 log = get_logger(__name__)
@@ -50,7 +50,17 @@ async def _discover_wallets(session: AsyncSession, top_markets: int) -> list[str
 
     await asyncio.gather(*(_guarded(cid) for cid in condition_ids))
 
+    # Fallback / augmentation: also seed candidates from wallets seen in recent
+    # trades. Robust when /holders is empty or its shape has drifted.
+    trade_wallets = await session.execute(
+        select(Trade.wallet).where(Trade.wallet.is_not(None)).distinct()
+    )
+    for (w,) in trade_wallets.all():
+        totals.setdefault(w, 0.0)
+
     ranked = sorted(totals, key=lambda w: totals[w], reverse=True)
+    if ranked:
+        log.info("_discover_wallets: %d candidate wallets", len(ranked))
     return ranked[: settings.top_traders]
 
 
