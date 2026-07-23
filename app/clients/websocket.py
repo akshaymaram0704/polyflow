@@ -70,12 +70,30 @@ class PriceStreamer:
                 await asyncio.wait_for(stop.wait(), timeout=1.0)
 
     # ------------------------------------------------------------------ #
+    def _ssl_context(self):
+        """TLS context backed by certifi's CA bundle.
+
+        Fixes ``CERTIFICATE_VERIFY_FAILED`` on macOS / python.org builds whose
+        default SSL context has no trusted CAs. Only needed for wss:// URLs.
+        """
+        if not self.cfg.ws_url.startswith("wss"):
+            return None
+        import ssl
+
+        try:
+            import certifi
+
+            return ssl.create_default_context(cafile=certifi.where())
+        except Exception:  # noqa: BLE001 - fall back to system defaults
+            return ssl.create_default_context()
+
     async def _run_live(self, stop: asyncio.Event) -> None:
         import websockets
 
+        ssl_ctx = self._ssl_context()
         while not stop.is_set():
             try:
-                async with websockets.connect(self.cfg.ws_url, ping_interval=20) as ws:
+                async with websockets.connect(self.cfg.ws_url, ping_interval=20, ssl=ssl_ctx) as ws:
                     await ws.send(json.dumps({"assets_ids": self._assets, "type": "market"}))
                     log.info("PriceStreamer: subscribed to %d assets (live)", len(self._assets))
                     async for raw in ws:
