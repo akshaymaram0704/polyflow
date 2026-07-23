@@ -1,0 +1,11 @@
+Alembic migrations for PolyFlow.
+
+The database URL is taken from app.config.settings (POLYFLOW_DATABASE_URL).
+
+Common commands:
+    alembic upgrade head                 # apply all migrations
+    alembic revision --autogenerate -m "msg"   # generate a new migration
+    alembic downgrade -1                 # roll back one revision
+
+The initial migration in versions/ creates the full schema. In docker, the API
+container runs `alembic upgrade head` on startup (see entrypoint.sh).

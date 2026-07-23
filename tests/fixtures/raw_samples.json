@@ -1,0 +1,48 @@
+{
+  "gamma_market": {
+    "conditionId": "0xabc123",
+    "question": "Will it rain tomorrow?",
+    "slug": "will-it-rain",
+    "outcomes": "[\"Yes\", \"No\"]",
+    "clobTokenIds": "[\"111\", \"222\"]",
+    "outcomePrices": "[\"0.62\", \"0.38\"]",
+    "volumeNum": 123456.78,
+    "liquidityNum": 5000.5,
+    "active": true,
+    "closed": false,
+    "startDate": "2026-01-01T00:00:00Z",
+    "endDate": "2026-12-31T00:00:00Z"
+  },
+  "data_position": {
+    "proxyWallet": "0xdeadbeef",
+    "name": "whale_1",
+    "asset": "111",
+    "conditionId": "0xabc123",
+    "outcome": "Yes",
+    "size": 1000.0,
+    "avgPrice": 0.5,
+    "curPrice": 0.62,
+    "initialValue": 500.0,
+    "currentValue": 620.0,
+    "cashPnl": 120.0,
+    "percentPnl": 0.24,
+    "realizedPnl": 10.0,
+    "redeemable": false
+  },
+  "data_trade": {
+    "transactionHash": "0xfeed",
+    "proxyWallet": "0xdeadbeef",
+    "asset": "111",
+    "conditionId": "0xabc123",
+    "outcome": "Yes",
+    "side": "buy",
+    "price": 0.5,
+    "size": 1000.0,
+    "usdcSize": 500.0,
+    "timestamp": 1760000000
+  },
+  "data_holder": {
+    "proxyWallet": "0xdeadbeef",
+    "amount": 1000.0
+  }
+}

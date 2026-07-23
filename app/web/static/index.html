@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PolyFlow — Trading Intelligence</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">◧</span>
+      <h1>PolyFlow</h1>
+      <span class="tagline">Polymarket trading intelligence</span>
+    </div>
+    <div class="status">
+      <span id="mode-badge" class="badge">…</span>
+      <span id="ws-badge" class="badge ws-off">● live feed</span>
+    </div>
+  </header>
+
+  <section class="stats" id="stats">
+    <div class="stat"><span class="stat-num" id="stat-markets">–</span><span class="stat-label">Markets</span></div>
+    <div class="stat"><span class="stat-num" id="stat-traders">–</span><span class="stat-label">Ranked traders</span></div>
+    <div class="stat"><span class="stat-num" id="stat-recs">–</span><span class="stat-label">Recommendations</span></div>
+    <div class="stat"><span class="stat-num" id="stat-ticks">0</span><span class="stat-label">Live ticks</span></div>
+  </section>
+
+  <main>
+    <div class="panel">
+      <h2>🎯 Recommendations <span class="hint">score-weighted consensus</span></h2>
+      <div class="table-wrap">
+        <table id="recs-table">
+          <thead>
+            <tr><th>Market</th><th>Call</th><th>Conf.</th><th>Support</th><th>Consensus $</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>🏆 Trader Leaderboard <span class="hint">composite ranking</span></h2>
+      <div class="table-wrap">
+        <table id="leaderboard-table">
+          <thead>
+            <tr><th>#</th><th>Wallet</th><th>Composite</th><th>Prof</th><th>Cons</th><th>Size</th><th>Risk</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>📈 Top Markets <span class="hint">live prices</span></h2>
+      <div class="table-wrap">
+        <table id="markets-table">
+          <thead>
+            <tr><th>Question</th><th>Category</th><th>Volume</th><th>Price</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <span>PolyFlow v0.1 · <a href="/docs">API docs</a></span>
+    <span id="updated">—</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
