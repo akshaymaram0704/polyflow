@@ -19,9 +19,11 @@ else
   echo "[run.sh] Mode: LIVE (real Polymarket data)"
 fi
 
-export POLYFLOW_DATABASE_URL="${POLYFLOW_DATABASE_URL:-sqlite+aiosqlite:///./polyflow_live.db}"
+export POLYFLOW_DATABASE_URL="${POLYFLOW_DATABASE_URL:-sqlite+aiosqlite:///./polyflow_sports.db}"
 export POLYFLOW_RUN_WORKER_IN_API="${POLYFLOW_RUN_WORKER_IN_API:-true}"
 export POLYFLOW_MARKET_LIMIT="${POLYFLOW_MARKET_LIMIT:-150}"
+# Sports-only focus (set POLYFLOW_CATEGORY="" for all markets).
+export POLYFLOW_CATEGORY="${POLYFLOW_CATEGORY:-sports}"
 # Keep the first live pull gentle on Polymarket's rate limits.
 export POLYFLOW_TOP_TRADERS="${POLYFLOW_TOP_TRADERS:-300}"
 export POLYFLOW_HTTP_CONCURRENCY="${POLYFLOW_HTTP_CONCURRENCY:-4}"

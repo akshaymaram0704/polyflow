@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     clob_url: str = "https://clob.polymarket.com"
     ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
+    # Category focus: "" = all categories, "sports" = sports markets only.
+    category: str = ""
+
     # Pipeline tuning
     market_limit: int = 500
     top_traders: int = 1000

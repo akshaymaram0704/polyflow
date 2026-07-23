@@ -154,6 +154,16 @@ input { font-family: var(--sans); }
 .mprice.hi { color: var(--green); } .mprice.lo { color: var(--red); } .mprice.flash-up { color: var(--green); } .mprice.flash-down { color: var(--red); }
 .vol-badge { font-size: .78rem; color: var(--muted); } .cat-pill { font-size: .72rem; color: var(--muted); border: 1px solid #2a2a30; border-radius: 6px; padding: 3px 9px; }
 .bar { height: 5px; border-radius: 999px; background: #1c1c20; overflow: hidden; margin-top: 16px; } .bar > i { display: block; height: 100%; background: var(--green); border-radius: 999px; transition: width .6s; }
+/* clear "trade plan" cards */
+.trade-card .trade-plain { color: var(--muted); font-size: .92rem; margin: 16px 0 14px; line-height: 1.5; }
+.trade-plain b { color: var(--text); font-weight: 700; }
+.trade-plain .cy { color: var(--green); } .trade-plain .cn { color: var(--red); }
+.trade-payout { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px;
+  font-size: .88rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trade-payout b { color: var(--text); } .trade-payout .prof { color: var(--green); font-weight: 700; }
+.pill.sm { padding: 9px 18px; font-size: .85rem; margin-top: 16px; }
+.filter-lbl { color: var(--faint); font-size: .82rem; align-self: center; margin-right: 4px; }
+
 .filters, .tabs { display: flex; gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
 .chip-btn { background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); border-radius: 999px; padding: 7px 16px; font-size: .85rem; cursor: pointer; font-family: var(--sans); transition: all .2s; }
 .chip-btn:hover { color: var(--text); } .chip-btn.on { background: var(--green); color: #001a00; border-color: var(--green); font-weight: 700; }

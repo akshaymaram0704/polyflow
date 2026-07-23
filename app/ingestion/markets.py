@@ -1,4 +1,9 @@
-"""Market ingestion: pull the active market catalog from Gamma and upsert it."""
+"""Market ingestion: pull the active market catalog from Gamma and upsert it.
+
+Supports an optional category filter (``POLYFLOW_CATEGORY``). When set to
+``sports`` the pipeline keeps only sports markets, so the entire platform —
+markets, traders, signals — becomes sports-only.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +16,51 @@ from app.logging import get_logger
 
 log = get_logger(__name__)
 
+# Strong sports signals: leagues, sports, and matchup markers.
+_SPORTS_TERMS = (
+    "nba", "nfl", "nhl", "mlb", "mls", "ncaa", "ufc", "mma", "epl", "uefa", "fifa",
+    "premier league", "la liga", "serie a", "bundesliga", "ligue 1", "champions league",
+    "europa", "world cup", "super bowl", "stanley cup", "world series", "playoff",
+    "finals", "grand prix", "formula 1", "olympic", "wimbledon", "ryder cup",
+    "soccer", "basketball", "baseball", "hockey", "tennis", "golf", "cricket",
+    "rugby", "boxing", "nascar", "pga", "atp", "wta", "wnba", "sport",
+)
+
+
+def _haystack(m: dict) -> str:
+    return " ".join(str(m.get(k) or "") for k in ("category", "slug", "question")).lower()
+
+
+def is_sports(m: dict) -> bool:
+    """Heuristic: does this market look like a sports market?"""
+    hay = _haystack(m)
+    if any(term in hay for term in _SPORTS_TERMS):
+        return True
+    # Team-vs-team matchup markers (very common for sports).
+    return " vs " in hay or " vs. " in hay or " @ " in hay
+
+
+def matches_category(m: dict, category: str) -> bool:
+    category = category.strip().lower()
+    if not category:
+        return True
+    if category in ("sport", "sports"):
+        return is_sports(m)
+    return category in _haystack(m)
+
 
 async def sync_markets(session: AsyncSession, limit: int | None = None) -> list[str]:
-    """Fetch active markets and upsert them. Returns the tracked CLOB token ids."""
+    """Fetch active markets (optionally filtered by category) and upsert them."""
     client = get_client()
     limit = limit or settings.market_limit
-    markets = await client.get_markets(limit=limit, active=True)
+    category = settings.category.strip()
+
+    # When filtering, over-fetch so we still end up with ~`limit` matches.
+    fetch = min(limit * 6, 600) if category else limit
+    markets = await client.get_markets(limit=fetch, active=True)
+    if category:
+        markets = [m for m in markets if matches_category(m, category)]
+        markets = markets[:limit]
 
     token_ids: list[str] = []
     for m in markets:
@@ -42,5 +86,8 @@ async def sync_markets(session: AsyncSession, limit: int | None = None) -> list[
         token_ids.extend(str(t) for t in m.get("clob_token_ids", []) if t)
 
     await session.commit()
-    log.info("sync_markets: upserted %d markets (%d tokens)", len(markets), len(token_ids))
+    suffix = f" [{category}]" if category else ""
+    log.info(
+        "sync_markets: upserted %d markets (%d tokens)%s", len(markets), len(token_ids), suffix
+    )
     return token_ids

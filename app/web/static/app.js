@@ -181,14 +181,15 @@ async function homePage() {
     <div class="steps"><div class="step reveal"><div class="n">1</div><h3>Ingest</h3><p>Stream markets, trades and positions across 500+ Polymarket markets in real time.</p></div>
       <div class="step reveal"><div class="n">2</div><h3>Rank</h3><p>Score every trader on profitability, consistency, sizing and risk-adjusted return.</p></div>
       <div class="step reveal"><div class="n">3</div><h3>Signal</h3><p>Distill the winners' capital into weighted consensus signals with a confidence score.</p></div></div></section>
-  <section class="section wrap"><div class="section-head reveal"><span class="kicker">TOP SIGNAL</span><h2>The strongest consensus, right now.</h2></div>
-    <div class="spotlight reveal">${top ? `<div class="gauge">${ring(top.confidence)}<span class="lab">consensus confidence</span></div>
-      <div class="spot-body"><h3>${esc(top.question || top.condition_id)}</h3><div class="spot-meta">
-        <div><div class="k">Signal</div><div class="v"><span class="tag ${yes ? "yes" : "no"}">${yes ? "▲ BUY YES" : "▼ BUY NO"}</span></div></div>
-        <div><div class="k">Consensus</div><div class="v">${fmtUsd(top.consensus_size_usd)}</div></div>
-        <div><div class="k">Backers</div><div class="v">${top.supporter_count}</div></div>
-        <div><div class="k">Agreement</div><div class="v">${pctOf(top.rationale?.agreement)}%</div></div></div>
-        <div style="margin-top:24px"><a class="pill" href="#/trading">Paper trade this</a></div></div>` : `<p class="muted">Signals warming up…</p>`}</div></section>
+  <section class="section wrap"><div class="section-head reveal"><span class="kicker">TOP POSITION RIGHT NOW</span><h2>The bet the best traders <span class="accent">most agree</span> on.</h2></div>
+    <div class="spotlight reveal">${top ? `<div class="gauge">${ring(top.confidence)}<span class="lab">confidence</span></div>
+      <div class="spot-body"><h3>${esc(top.question || top.condition_id)}</h3>
+        <p class="trade-plain" style="margin-top:14px"><b>${top.supporter_count} top traders</b> are backing <b class="${yes ? "cy" : "cn"}">${yes ? "YES" : "NO"}</b> with ${fmtUsd(top.consensus_size_usd)} — ${pctOf(top.rationale?.agreement)}% of the smart money agrees.</p>
+        <div class="spot-meta">
+        <div><div class="k">Position</div><div class="v"><span class="tag ${yes ? "yes" : "no"}">${yes ? "▲ BUY YES" : "▼ BUY NO"}</span></div></div>
+        <div><div class="k">Buy at</div><div class="v">${Math.round((top.current_price || top.avg_entry_price || .5) * 100)}¢</div></div>
+        <div><div class="k">$100 pays</div><div class="v">$${(100 / (top.current_price || top.avg_entry_price || .5)).toFixed(0)}</div></div></div>
+        <div style="margin-top:24px"><a class="pill" href="#/trading">Paper-trade this →</a></div></div>` : `<p class="muted">Signals warming up…</p>`}</div></section>
   <section class="wrap"><div class="stat-band">
     <div class="reveal"><div class="stat-num">${markets.length}</div><div class="stat-label">Markets tracked</div></div>
     <div class="reveal"><div class="stat-num">${board.length}</div><div class="stat-label">Traders ranked</div></div>
@@ -204,15 +205,38 @@ async function homePage() {
 // ============================================================
 // Signals
 // ============================================================
+function tradeCard(r, cls = "reveal") {
+  const yes = (r.outcome || "").toLowerCase() === "yes";
+  const price = +(r.current_price || r.avg_entry_price || 0.5);
+  const cents = Math.round(price * 100);
+  const win = 100 / (price || 0.5);
+  const profit = win - 100;
+  const side = yes ? "YES" : "NO";
+  return `<article class="card trade-card ${cls}">
+    <div class="card-head">
+      <div><div class="card-kicker ${yes ? "yes" : "no"}">${yes ? "▲ BUY YES" : "▼ BUY NO"}</div>
+        <div class="card-q">${esc((r.question || r.condition_id).slice(0, 92))}</div></div>
+      ${ring(r.confidence, 72, 7)}
+    </div>
+    <p class="trade-plain"><b>${r.supporter_count} top traders</b> are backing <b class="${yes ? "cy" : "cn"}">${side}</b> with ${fmtUsd(r.consensus_size_usd)}. You profit if this resolves <b>${side}</b>.</p>
+    <div class="trade-payout">Buy ${side} ≈ <b>${cents}¢</b> · $100 → <b>$${win.toFixed(0)}</b> if correct <span class="prof">(+$${profit.toFixed(0)})</span></div>
+    <a class="pill sm" href="#/trading">Paper-trade this →</a>
+  </article>`;
+}
+
 async function signalsPage() {
   const recs = await loadRecs();
-  app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">HIGH-CONVICTION</span><h1>Signals the <span class="accent">winners</span> are backing.</h1><p>Each is a score-weighted consensus of top-ranked traders. Filter by confidence.</p></section>
-  <section class="wrap section" style="padding-top:20px"><div class="filters" id="cf"><button class="chip-btn on" data-min="0">All</button><button class="chip-btn" data-min="0.6">60%+</button><button class="chip-btn" data-min="0.7">70%+</button><button class="chip-btn" data-min="0.8">80%+</button></div><div id="sg" class="grid"></div></section>`;
+  app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">POSITIONS TO TAKE</span><h1>What the <span class="accent">best traders</span> are buying.</h1>
+    <p>Each card is a position PolyFlow suggests. It's the outcome that the highest-ranked traders are backing with the most money. <b>Confidence</b> (the ring) rises when more top traders agree, with more capital behind them.</p></section>
+  <section class="wrap section" style="padding-top:16px">
+    <div class="filters" id="cf"><span class="filter-lbl">Min confidence:</span><button class="chip-btn on" data-min="0">All</button><button class="chip-btn" data-min="0.6">60%+</button><button class="chip-btn" data-min="0.7">70%+</button><button class="chip-btn" data-min="0.8">80%+</button></div>
+    <div id="sg" class="grid"></div></section>`;
   const grid = $("#sg");
-  const render = (min) => { grid.innerHTML = recs.filter((r) => r.confidence >= min).slice(0, 30).map((r) => { const yes = (r.outcome || "").toLowerCase() === "yes";
-    return `<article class="card reveal"><div class="card-head"><div><div class="card-kicker ${yes ? "yes" : "no"}">${yes ? "▲ BUY YES" : "▼ BUY NO"}</div><div class="card-q">${esc((r.question || r.condition_id).slice(0, 90))}</div></div>${ring(r.confidence, 72, 7)}</div>
-    <div class="card-foot"><div><div class="k">Consensus</div><div class="v">${fmtUsd(r.consensus_size_usd)}</div></div><div><div class="k">Backers</div><div class="v">${r.supporter_count}</div></div><div><div class="k">Entry</div><div class="v">${(r.avg_entry_price || 0).toFixed(2)}</div></div></div></article>`; }).join("") || `<p class="muted">No signals at this threshold.</p>`;
-    animRings(grid); observeReveals(grid); };
+  const render = (min) => {
+    grid.innerHTML = recs.filter((r) => r.confidence >= min).slice(0, 30).map((r) => tradeCard(r)).join("")
+      || `<p class="muted">No positions at this confidence level.</p>`;
+    animRings(grid); observeReveals(grid);
+  };
   render(0);
   $$("#cf .chip-btn").forEach((b) => b.addEventListener("click", () => { $$("#cf .chip-btn").forEach((x) => x.classList.remove("on")); b.classList.add("on"); render(+b.dataset.min); }));
 }
@@ -222,7 +246,7 @@ async function signalsPage() {
 // ============================================================
 async function tradersPage() {
   const board = await loadBoard();
-  app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">LEADERBOARD</span><h1>Ranked by <span class="accent">results</span>, not noise.</h1><p>A composite score from four independent, cohort-normalized dimensions.</p></section>
+  app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">LEADERBOARD</span><h1>Ranked by <span class="accent">results</span>, not noise.</h1><p>Every trader gets a <b>Composite score (0–100)</b> — higher means more skilled. It blends the four things below, each measured relative to all other traders. <b>PolyFlow only builds signals from the traders at the top of this list.</b></p></section>
   <section class="wrap section" style="padding-top:20px"><div class="explain">
     <div class="ex reveal"><div class="icon">📈</div><h4>Profitability</h4><p>Realized + unrealized PnL and ROI across every position.</p></div>
     <div class="ex reveal"><div class="icon">🎯</div><h4>Consistency</h4><p>Win rate, low-variance returns and a real track record.</p></div>
