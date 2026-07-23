@@ -95,8 +95,11 @@ class PriceStreamer:
             try:
                 # Polymarket sends a large initial book snapshot for many assets;
                 # raise the read limit well above the 1 MB default to avoid 1009.
+                # Lenient keepalive: heavy scoring can briefly block the loop, so
+                # give pongs plenty of slack to avoid needless 1011 reconnects.
                 async with websockets.connect(
-                    self.cfg.ws_url, ping_interval=20, ssl=ssl_ctx, max_size=32 * 1024 * 1024
+                    self.cfg.ws_url, ping_interval=30, ping_timeout=90,
+                    ssl=ssl_ctx, max_size=32 * 1024 * 1024,
                 ) as ws:
                     await ws.send(json.dumps({"assets_ids": self._assets, "type": "market"}))
                     log.info("PriceStreamer: subscribed to %d assets (live)", len(self._assets))

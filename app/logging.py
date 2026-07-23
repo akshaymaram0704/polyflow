@@ -28,8 +28,11 @@ def configure_logging() -> None:
     root.setLevel(settings.log_level.upper())
     root.handlers[:] = [handler]
 
-    # Tame noisy third-party loggers.
-    for noisy in ("httpx", "httpcore", "apscheduler.scheduler", "websockets.client"):
+    # Tame noisy third-party loggers (keep our app.* logs at the chosen level).
+    for noisy in (
+        "httpx", "httpcore", "websockets.client",
+        "apscheduler.scheduler", "apscheduler.executors.default", "apscheduler",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     _CONFIGURED = True
