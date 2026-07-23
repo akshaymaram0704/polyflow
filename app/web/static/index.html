@@ -3,72 +3,68 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PolyFlow — Trading Intelligence</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <title>PolyFlow — Follow the smartest money on Polymarket</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=6" />
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <span class="logo">◧</span>
-      <h1>PolyFlow</h1>
-      <span class="tagline">Polymarket trading intelligence</span>
+  <nav id="nav">
+    <a class="brand" href="#/">
+      <svg class="hex" width="24" height="26" viewBox="0 0 26 28" aria-hidden="true">
+        <path d="M13 1 L24 7 V21 L13 27 L2 21 V7 Z" fill="none" stroke="#00C805" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M13 8 L18 11 V17 L13 20 L8 17 V11 Z" fill="#00C805"/>
+      </svg>
+      <span class="wordmark">PolyFlow</span>
+    </a>
+    <div class="nav-links">
+      <a data-route="" href="#/">Home</a>
+      <a data-route="signals" href="#/signals">Signals</a>
+      <a data-route="traders" href="#/traders">Traders</a>
+      <a data-route="markets" href="#/markets">Markets</a>
+      <a data-route="trading" href="#/trading">Trading</a>
+      <a data-route="performance" href="#/performance">Performance</a>
     </div>
-    <div class="status">
-      <span id="mode-badge" class="badge">…</span>
-      <span id="ws-badge" class="badge ws-off">● live feed</span>
+    <div class="nav-actions">
+      <span id="mode-chip" class="mode">fixtures</span>
+      <a class="pill" href="#/trading">Open app</a>
     </div>
-  </header>
+  </nav>
 
-  <section class="stats" id="stats">
-    <div class="stat"><span class="stat-num" id="stat-markets">–</span><span class="stat-label">Markets</span></div>
-    <div class="stat"><span class="stat-num" id="stat-traders">–</span><span class="stat-label">Ranked traders</span></div>
-    <div class="stat"><span class="stat-num" id="stat-recs">–</span><span class="stat-label">Recommendations</span></div>
-    <div class="stat"><span class="stat-num" id="stat-ticks">0</span><span class="stat-label">Live ticks</span></div>
-  </section>
-
-  <main>
-    <div class="panel">
-      <h2>🎯 Recommendations <span class="hint">score-weighted consensus</span></h2>
-      <div class="table-wrap">
-        <table id="recs-table">
-          <thead>
-            <tr><th>Market</th><th>Call</th><th>Conf.</th><th>Support</th><th>Consensus $</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>🏆 Trader Leaderboard <span class="hint">composite ranking</span></h2>
-      <div class="table-wrap">
-        <table id="leaderboard-table">
-          <thead>
-            <tr><th>#</th><th>Wallet</th><th>Composite</th><th>Prof</th><th>Cons</th><th>Size</th><th>Risk</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>📈 Top Markets <span class="hint">live prices</span></h2>
-      <div class="table-wrap">
-        <table id="markets-table">
-          <thead>
-            <tr><th>Question</th><th>Category</th><th>Volume</th><th>Price</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-  </main>
+  <div id="app"><!-- routed page renders here --></div>
 
   <footer>
-    <span>PolyFlow v0.1 · <a href="/docs">API docs</a></span>
-    <span id="updated">—</span>
+    <div class="foot">
+      <div class="foot-col brand-col">
+        <div class="brand">
+          <svg class="hex" width="20" height="22" viewBox="0 0 26 28"><path d="M13 1 L24 7 V21 L13 27 L2 21 V7 Z" fill="none" stroke="#00C805" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="wordmark">PolyFlow</span>
+        </div>
+        <p class="muted">Trading intelligence for Polymarket. Rank the winners, follow the money.</p>
+      </div>
+      <div class="foot-col">
+        <h4>Product</h4>
+        <a href="#/signals">Signals</a><a href="#/traders">Traders</a>
+        <a href="#/markets">Markets</a><a href="#/trading">Paper Trading</a>
+      </div>
+      <div class="foot-col">
+        <h4>Resources</h4>
+        <a href="#/performance">Performance</a><a href="/docs" target="_blank">API docs</a>
+        <a href="/redoc" target="_blank">API reference</a>
+      </div>
+      <div class="foot-col">
+        <h4>Status</h4>
+        <span id="foot-mode" class="muted">—</span>
+        <span id="foot-updated" class="muted"></span>
+      </div>
+    </div>
+    <div class="foot-base muted">© 2026 PolyFlow · Read-only analytics · Not financial advice</div>
   </footer>
 
-  <script src="/static/app.js"></script>
+  <div id="tooltip" class="tooltip"></div>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>
