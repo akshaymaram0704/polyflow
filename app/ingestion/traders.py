@@ -69,13 +69,27 @@ async def sync_traders(session: AsyncSession, top_markets: int = 150) -> int:
     client = get_client()
     wallets = await _discover_wallets(session, top_markets)
 
-    sem = asyncio.Semaphore(settings.http_concurrency)
+    sem = asyncio.Semaphore(min(settings.http_concurrency, 5))
+    failures = 0
 
     async def _fetch(wallet: str) -> tuple[str, list[dict]]:
+        nonlocal failures
         async with sem:
-            return wallet, await client.get_positions(wallet, limit=200)
+            try:
+                positions = await client.get_positions(wallet, limit=200)
+                await asyncio.sleep(0.05)  # gentle pacing for the Data API
+                return wallet, positions
+            except Exception:  # noqa: BLE001 - skip a wallet, never crash the batch
+                failures += 1
+                return wallet, []
 
     results = await asyncio.gather(*(_fetch(w) for w in wallets))
+    if failures:
+        log.warning(
+            "sync_traders: %d/%d position fetches failed (likely rate limits) — "
+            "lower POLYFLOW_TOP_TRADERS or POLYFLOW_HTTP_CONCURRENCY if persistent",
+            failures, len(wallets),
+        )
 
     now = utcnow()
     synced = 0

@@ -66,22 +66,41 @@ async def lifespan(app: FastAPI):
 
 
 async def _start_in_process_worker(stop: asyncio.Event) -> list[asyncio.Task]:
-    """Run the pipeline + price streamer inside the API (offline demo mode)."""
+    """Run the pipeline + price streamer inside the API.
+
+    Markets are synced first (fast) so the price stream has tokens; the heavier
+    trades/traders/scoring pass runs in the BACKGROUND so a slow or rate-limited
+    ingest never blocks or crashes API startup.
+    """
     from app.clients.websocket import PriceStreamer
     from app.worker import pipeline
     from app.worker.scheduler import build_scheduler
 
     log.info("run_worker_in_api=true -> seeding pipeline in-process")
-    await pipeline.run_full_cycle()
+    try:
+        tokens = await pipeline.job_sync_markets()
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.error("initial market sync failed: %s", exc)
+        tokens = []
 
     streamer = PriceStreamer()
-    await streamer.set_assets(pipeline.tracked_tokens())
+    await streamer.set_assets(tokens)
     streamer_task = asyncio.create_task(streamer.run(stop))
+
+    async def _seed_rest() -> None:
+        for step in (pipeline.job_sync_trades, pipeline.job_sync_traders, pipeline.job_scoring):
+            try:
+                await step()
+            except Exception as exc:  # noqa: BLE001 - log and continue
+                log.error("initial %s failed: %s", step.__name__, exc)
+        await streamer.set_assets(pipeline.tracked_tokens())
+
+    seed_task = asyncio.create_task(_seed_rest())
 
     scheduler = build_scheduler()
     scheduler.start()
-    log.info("In-process worker active (scheduler + price streamer)")
-    return [streamer_task]
+    log.info("In-process worker active (API serving; ingestion running in background)")
+    return [streamer_task, seed_task]
 
 
 def create_app() -> FastAPI:

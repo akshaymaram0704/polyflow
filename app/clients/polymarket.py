@@ -197,13 +197,18 @@ class LivePolymarketClient(BasePolymarketClient):
 
     @retry(
         retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, max=8),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, max=20),
         reraise=True,
     )
     async def _get(self, url: str, params: dict | None = None) -> Any:
         async with self._sem:
             resp = await self._client.get(url, params=params)
+            # Honor Retry-After on 429 before tenacity's own back-off.
+            if resp.status_code == 429:
+                delay = float(resp.headers.get("retry-after", 0) or 0)
+                if delay:
+                    await asyncio.sleep(min(delay, 20))
             resp.raise_for_status()
             return resp.json()
 
