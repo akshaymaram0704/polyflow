@@ -28,5 +28,6 @@ export POLYFLOW_CATEGORY="${POLYFLOW_CATEGORY:-sports}"
 export POLYFLOW_TOP_TRADERS="${POLYFLOW_TOP_TRADERS:-300}"
 export POLYFLOW_HTTP_CONCURRENCY="${POLYFLOW_HTTP_CONCURRENCY:-4}"
 
+echo "[run.sh] Category filter: ${POLYFLOW_CATEGORY:-<all>}   DB: $POLYFLOW_DATABASE_URL"
 echo "[run.sh] Open http://localhost:8000/  (Ctrl+C to stop)"
 exec python -m uvicorn app.main:app --port 8000

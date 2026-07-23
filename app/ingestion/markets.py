@@ -24,6 +24,7 @@ _SPORTS_TERMS = (
     "finals", "grand prix", "formula 1", "olympic", "wimbledon", "ryder cup",
     "soccer", "basketball", "baseball", "hockey", "tennis", "golf", "cricket",
     "rugby", "boxing", "nascar", "pga", "atp", "wta", "wnba", "sport",
+    "championship", "tournament", "qualify", "cup final", "grand slam", "heavyweight",
 )
 
 
@@ -56,11 +57,21 @@ async def sync_markets(session: AsyncSession, limit: int | None = None) -> list[
     category = settings.category.strip()
 
     # When filtering, over-fetch so we still end up with ~`limit` matches.
-    fetch = min(limit * 6, 600) if category else limit
+    fetch = min(limit * 8, 800) if category else limit
     markets = await client.get_markets(limit=fetch, active=True)
     if category:
-        markets = [m for m in markets if matches_category(m, category)]
-        markets = markets[:limit]
+        matched = [m for m in markets if matches_category(m, category)]
+        if len(matched) < 5:
+            # Help diagnose a heuristic miss: show what the live data actually looks like.
+            samples = [
+                f"cat={m.get('category')!r} q={(m.get('question') or '')[:48]!r}"
+                for m in markets[:8]
+            ]
+            log.warning(
+                "category=%s matched only %d of %d fetched markets. Samples: %s",
+                category, len(matched), len(markets), samples,
+            )
+        markets = matched[:limit]
 
     token_ids: list[str] = []
     for m in markets:
