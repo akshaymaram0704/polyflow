@@ -21,7 +21,7 @@ fi
 
 export POLYFLOW_DATABASE_URL="${POLYFLOW_DATABASE_URL:-sqlite+aiosqlite:///./polyflow_sports.db}"
 export POLYFLOW_RUN_WORKER_IN_API="${POLYFLOW_RUN_WORKER_IN_API:-true}"
-export POLYFLOW_MARKET_LIMIT="${POLYFLOW_MARKET_LIMIT:-300}"
+export POLYFLOW_MARKET_LIMIT="${POLYFLOW_MARKET_LIMIT:-500}"
 # Sports-only focus (set POLYFLOW_CATEGORY="" for all markets).
 export POLYFLOW_CATEGORY="${POLYFLOW_CATEGORY:-sports}"
 # Keep the first live pull gentle on Polymarket's rate limits.

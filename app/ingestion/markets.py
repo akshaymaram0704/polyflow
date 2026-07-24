@@ -16,15 +16,39 @@ from app.logging import get_logger
 
 log = get_logger(__name__)
 
-# Strong sports signals: leagues, sports, and matchup markers.
+# Leagues / sports / events.
 _SPORTS_TERMS = (
     "nba", "nfl", "nhl", "mlb", "mls", "ncaa", "ufc", "mma", "epl", "uefa", "fifa",
     "premier league", "la liga", "serie a", "bundesliga", "ligue 1", "champions league",
     "europa", "world cup", "super bowl", "stanley cup", "world series", "playoff",
-    "finals", "grand prix", "formula 1", "olympic", "wimbledon", "ryder cup",
+    "grand prix", "formula 1", " f1 ", "olympic", "wimbledon", "ryder cup",
     "soccer", "basketball", "baseball", "hockey", "tennis", "golf", "cricket",
     "rugby", "boxing", "nascar", "pga", "atp", "wta", "wnba", "sport",
-    "championship", "tournament", "qualify", "cup final", "grand slam", "heavyweight",
+    "championship", "tournament", "qualify", "grand slam", "heavyweight", "playoffs",
+    # generic event words (guarded by the exclusion list below)
+    "win the", "to win", "champion", "vs", " @ ", "beat the", "defeat", "advance",
+    "clinch", "mvp", "relegat", "semifinal", "quarterfinal", "the cup", "the final",
+)
+
+# Common team / club / athlete names so "Will the Lakers win?" is caught.
+_TEAMS = (
+    "lakers", "celtics", "warriors", "nuggets", "bucks", "heat", "knicks", "76ers", "sixers",
+    "mavericks", "suns", "clippers", "nets", "bulls", "cavaliers", "thunder", "timberwolves",
+    "pelicans", "grizzlies", "chiefs", "eagles", "49ers", "niners", "cowboys", "ravens", "bills",
+    "bengals", "packers", "lions", "dolphins", "patriots", "steelers", "vikings", "jaguars",
+    "chargers", "rams", "seahawks", "commanders", "texans", "browns", "yankees", "dodgers",
+    "red sox", "astros", "braves", "mets", "cubs", "phillies", "padres", "guardians", "rangers",
+    "oilers", "panthers", "bruins", "avalanche", "maple leafs", "golden knights", "real madrid",
+    "barcelona", "man city", "manchester", "liverpool", "arsenal", "chelsea", "tottenham",
+    "bayern", "psg", "juventus", "inter milan", "ac milan", "dortmund", "messi", "ronaldo",
+    "lebron",
+)
+
+# If any of these appear, it's NOT sports (guards the broad generic terms above).
+_NOT_SPORTS = (
+    "election", "president", "trump", "biden", "senate", "congress", "governor", "fed ",
+    "interest rate", "bitcoin", "ethereum", "crypto", "gdp", "inflation", "nominee", "approval",
+    "supreme court", "shutdown", "tariff", "recession", "stock", "nasdaq",
 )
 
 
@@ -35,10 +59,13 @@ def _haystack(m: dict) -> str:
 def is_sports(m: dict) -> bool:
     """Heuristic: does this market look like a sports market?"""
     hay = _haystack(m)
+    if any(term in hay for term in _NOT_SPORTS):
+        return False
     if any(term in hay for term in _SPORTS_TERMS):
         return True
-    # Team-vs-team matchup markers (very common for sports).
-    return " vs " in hay or " vs. " in hay or " @ " in hay
+    if any(team in hay for team in _TEAMS):
+        return True
+    return " vs " in hay or " vs. " in hay
 
 
 def matches_category(m: dict, category: str) -> bool:
@@ -57,7 +84,7 @@ async def sync_markets(session: AsyncSession, limit: int | None = None) -> list[
     category = settings.category.strip()
 
     # When filtering, over-fetch so we still end up with ~`limit` matches.
-    fetch = min(limit * 8, 800) if category else limit
+    fetch = min(limit * 6, 1200) if category else limit
     markets = await client.get_markets(limit=fetch, active=True)
     if category:
         matched = [m for m in markets if matches_category(m, category)]
