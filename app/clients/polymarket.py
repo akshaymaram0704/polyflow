@@ -158,7 +158,8 @@ class BasePolymarketClient:
     """Interface shared by the live and fixture clients."""
 
     async def get_markets(
-        self, limit: int = 500, active: bool = True, min_volume: float = 0.0
+        self, limit: int = 500, active: bool = True, min_volume: float = 0.0,
+        order: str = "volumeNum", ascending: bool = False,
     ) -> list[dict]:
         raise NotImplementedError
 
@@ -213,9 +214,16 @@ class LivePolymarketClient(BasePolymarketClient):
             return resp.json()
 
     async def get_markets(
-        self, limit: int = 500, active: bool = True, min_volume: float = 0.0
+        self,
+        limit: int = 500,
+        active: bool = True,
+        min_volume: float = 0.0,
+        order: str = "volumeNum",
+        ascending: bool = False,
     ) -> list[dict]:
-        """Page through Gamma /markets until `limit` active markets are collected."""
+        """Page through Gamma /markets. ``order``/``ascending`` control sorting —
+        e.g. ``order='endDate', ascending=True`` surfaces soonest-resolving (live/
+        in-play) markets rather than the highest-volume ones."""
         collected: list[dict] = []
         offset, page = 0, min(limit, 100)
         while len(collected) < limit:
@@ -224,8 +232,8 @@ class LivePolymarketClient(BasePolymarketClient):
                 "offset": offset,
                 "active": str(active).lower(),
                 "closed": "false",
-                "order": "volumeNum",
-                "ascending": "false",
+                "order": order,
+                "ascending": str(ascending).lower(),
             }
             if min_volume:
                 params["volume_num_min"] = min_volume

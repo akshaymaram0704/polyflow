@@ -86,6 +86,18 @@ async def sync_markets(session: AsyncSession, limit: int | None = None) -> list[
     # When filtering, over-fetch so we still end up with ~`limit` matches.
     fetch = min(limit * 6, 1200) if category else limit
     markets = await client.get_markets(limit=fetch, active=True)
+
+    # Also pull the soonest-resolving active markets — this is where live/in-play
+    # matches (e.g. a tennis match ending in an hour) live, regardless of volume.
+    try:
+        soon = await client.get_markets(
+            limit=min(fetch, 400), active=True, order="endDate", ascending=True
+        )
+        seen = {m.get("condition_id") for m in markets}
+        markets.extend(m for m in soon if m.get("condition_id") not in seen)
+    except Exception as exc:  # noqa: BLE001 - non-fatal; volume set still works
+        log.warning("soonest-resolving fetch failed: %s", exc)
+
     if category:
         matched = [m for m in markets if matches_category(m, category)]
         if len(matched) < 5:
@@ -98,7 +110,8 @@ async def sync_markets(session: AsyncSession, limit: int | None = None) -> list[
                 "category=%s matched only %d of %d fetched markets. Samples: %s",
                 category, len(matched), len(markets), samples,
             )
-        markets = matched[:limit]
+        # Keep a generous cap so live/in-play matches aren't truncated away.
+        markets = matched[: max(limit, 800)]
 
     token_ids: list[str] = []
     for m in markets:

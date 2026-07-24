@@ -170,7 +170,8 @@ class FixturePolymarketClient(BasePolymarketClient):
         self.u = _universe()
 
     async def get_markets(
-        self, limit: int = 500, active: bool = True, min_volume: float = 0.0
+        self, limit: int = 500, active: bool = True, min_volume: float = 0.0,
+        order: str = "volumeNum", ascending: bool = False,
     ) -> list[dict]:
         rows = [self.u.markets[cid] for cid in self.u.market_order]
         rows = [m for m in rows if m["volume"] >= min_volume]
