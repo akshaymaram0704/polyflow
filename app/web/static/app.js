@@ -303,12 +303,23 @@ async function marketsPage() {
 // TRADING TERMINAL (real-time paper portfolio)
 // ============================================================
 const PF_KEY = "polyflow_pf_v1";
-const BOT_DEFAULTS = { minEdge: 0.06, kelly: 0.3, maxPerTrade: 0.12, tp: 0.4, sl: 0.25, maxPos: 6 };
+const BOT_DEFAULTS = {
+  minEdge: 0.05,     // minimum expected edge to open
+  kelly: 0.4,        // fractional Kelly multiplier
+  maxPerTrade: 0.15, // cap per position (fraction of bankroll)
+  maxGross: 0.85,    // cap total deployed capital
+  targetVol: 0.04,   // volatility target for sizing
+  tp: 0.5,           // take-profit (+%)
+  sl: 0.25,          // stop-loss (−%)
+  trail: 0.18,       // trailing-stop giveback from peak
+  maxPos: 8,
+};
 function loadPF() {
   let p; try { p = JSON.parse(localStorage.getItem(PF_KEY)); } catch {}
   if (!p || !p.positions) p = { cash: 10000, start: 10000, positions: {} };
   p.trades = p.trades || []; p.equity = p.equity || [];
-  p.bot = p.bot || { enabled: false, bankroll: 0, cash: 0, positions: {}, log: [], realized: 0, equity: [], params: { ...BOT_DEFAULTS } };
+  p.bot = p.bot || { enabled: false, bankroll: 0, cash: 0, positions: {}, log: [], realized: 0, equity: [], attribution: {}, params: { ...BOT_DEFAULTS } };
+  p.bot.attribution = p.bot.attribution || {};
   p.bot.params = { ...BOT_DEFAULTS, ...(p.bot.params || {}) };
   return p;
 }
@@ -684,21 +695,73 @@ function botValue() { let v = PF.bot.cash; for (const [t, p] of Object.entries(P
 function botLog(msg) { PF.bot.log.unshift({ ts: now(), msg }); if (PF.bot.log.length > 60) PF.bot.log.pop(); }
 function fundBot(amt) { amt = Math.min(PF.cash, Math.max(0, +amt || 0)); if (amt <= 0) return; PF.cash -= amt; PF.bot.cash += amt; PF.bot.bankroll += amt; savePF(PF); toast(`Funded bot with ${money(amt)}`); renderAuto(); }
 function withdrawBot() { for (const [t, p] of Object.entries(PF.bot.positions)) PF.bot.cash += p.shares * (LP[t] ?? p.avg); PF.bot.positions = {}; PF.cash += PF.bot.cash; PF.bot.cash = 0; PF.bot.bankroll = 0; PF.bot.enabled = false; savePF(PF); toast("Withdrew bot funds to cash"); renderAuto(); }
-function botBuy(c, stake) { const t = String(c.r.asset); const shares = stake / c.p; PF.bot.cash -= stake; PF.bot.positions[t] = { shares, cost: stake, avg: c.p, q: c.q, name: c.r.question || t, outcome: c.r.outcome }; botLog(`BUY ${(c.r.question || "").slice(0, 30)} @ ${pctOf(c.p)}¢ · edge +${Math.round(c.edge * 100)}% · ${money(stake)}`); }
-function botSell(t, reason) { const p = PF.bot.positions[t]; if (!p) return; const price = LP[t] ?? p.avg, proceeds = p.shares * price, pnl = proceeds - p.cost; PF.bot.cash += proceeds; PF.bot.realized += pnl; botLog(`SELL ${(p.name || "").slice(0, 30)} @ ${pctOf(price)}¢ · ${reason} · ${pnl >= 0 ? "+" : ""}${money(pnl)}`); delete PF.bot.positions[t]; }
+// --- Alpha model: blend PolyFlow's consensus factors + price momentum into a
+// fair probability q via a logistic tilt on the market-implied price, plus a
+// realized-vol estimate used for volatility-targeted sizing. ---
+function computeAlpha(r) {
+  const t = String(r.asset);
+  const p = clamp(+(r.current_price || LP[t] || .5), .02, .98);
+  const arr = HIST[t]; let vol = 0.03, mom = 0;
+  if (arr && arr.length > 12) {
+    const rec = arr.slice(-20), rets = [];
+    for (let i = 1; i < rec.length; i++) rets.push((rec[i] - rec[i - 1]) / (rec[i - 1] || 1));
+    const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+    vol = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length) || 0.03;
+    const past = rec[Math.max(0, rec.length - 10)]; mom = clamp(((p - past) / (past || 1)) * 4, -1, 1);
+  }
+  const a = r.rationale?.agreement ?? 0.6;            // directional agreement
+  const s = r.rationale?.avg_trader_score ?? 0.5;      // backers' skill
+  const z = r.consensus_size_usd ? r.consensus_size_usd / (r.consensus_size_usd + 10000) : 0.3; // capital
+  const alpha = 1.4 * (a - 0.5) * 2 + 0.9 * (s - 0.5) * 2 + 0.5 * z + 0.7 * mom;
+  const logit = Math.log(p / (1 - p));
+  const q = clamp(1 / (1 + Math.exp(-(logit + 0.55 * alpha))), .02, .98);
+  return { r, t, p, q, edge: q / p - 1, vol, mom };
+}
+function botBuy(c, stake) {
+  const shares = stake / c.p;
+  PF.bot.cash -= stake;
+  PF.bot.positions[c.t] = { shares, cost: stake, avg: c.p, q: c.q, peak: c.p, name: c.r.question || c.t, outcome: c.r.outcome, lead: c.r.rationale?.top_traders?.[0]?.wallet || null };
+  botLog(`BUY ${(c.r.question || "").slice(0, 28)} @ ${pctOf(c.p)}¢ · edge +${Math.round(c.edge * 100)}% · ${money(stake)}`);
+}
+function botSell(t, reason) {
+  const p = PF.bot.positions[t]; if (!p) return;
+  const price = LP[t] ?? p.avg, proceeds = p.shares * price, pnl = proceeds - p.cost;
+  PF.bot.cash += proceeds; PF.bot.realized += pnl;
+  if (p.lead) { const a = PF.bot.attribution[p.lead] || { pnl: 0, trades: 0, wins: 0 }; a.pnl += pnl; a.trades += 1; if (pnl > 0) a.wins += 1; PF.bot.attribution[p.lead] = a; }
+  botLog(`SELL ${(p.name || "").slice(0, 28)} @ ${pctOf(price)}¢ · ${reason} · ${pnl >= 0 ? "+" : ""}${money(pnl)}`);
+  delete PF.bot.positions[t];
+}
 async function evaluateBot() {
-  const bot = PF.bot; if (!bot.enabled) return;
+  const bot = PF.bot, P = bot.params; if (!bot.enabled) return;
   const live = await getJSON("/recommendations/live?limit=40").catch(() => []);
-  live.forEach((r) => { const t = String(r.asset); if (LP[t] == null) LP[t] = +(r.current_price || .5); });
-  [...Object.keys(bot.positions), ...live.map((r) => String(r.asset))].forEach((t) => { if (LP[t] != null) LP[t] = clamp(LP[t] * (1 + (Math.random() - .5) * .02), .02, .98); });
-  for (const [t, p] of Object.entries(bot.positions)) { const price = LP[t] ?? p.avg, pct = (price - p.avg) / p.avg;
-    if (price >= p.q) botSell(t, "target reached"); else if (pct >= bot.params.tp) botSell(t, "take-profit"); else if (pct <= -bot.params.sl) botSell(t, "stop-loss"); }
-  const cands = live.map((r) => { const p = clamp(+(r.current_price || .5), .02, .98); const q = clamp(p + .6 * (r.confidence - .5) * (1 - p), .02, .98); return { r, p, q, edge: q / p - 1 }; })
-    .filter((c) => c.edge >= bot.params.minEdge && c.p >= .1 && c.p <= .7 && !bot.positions[String(c.r.asset)])
+  live.forEach((r) => { const t = String(r.asset); if (LP[t] == null) LP[t] = +(r.current_price || .5); seedHist(t, LP[t]); });
+  // advance prices + history so momentum/vol evolve
+  [...Object.keys(bot.positions), ...live.map((r) => String(r.asset))].forEach((t) => { if (LP[t] != null) { LP[t] = clamp(LP[t] * (1 + (Math.random() - .5) * .02), .02, .98); pushHist(t); } });
+
+  // --- exits: fair-value target, take-profit, stop-loss, trailing stop ---
+  for (const [t, pos] of Object.entries(bot.positions)) {
+    const price = LP[t] ?? pos.avg; pos.peak = Math.max(pos.peak || pos.avg, price);
+    const pct = (price - pos.avg) / pos.avg;
+    if (price >= pos.q) botSell(t, "fair-value target");
+    else if (pct >= P.tp) botSell(t, "take-profit");
+    else if (pct <= -P.sl) botSell(t, "stop-loss");
+    else if (price > pos.avg && price <= pos.peak * (1 - P.trail)) botSell(t, "trailing stop");
+  }
+
+  // --- entries: rank by edge, size with vol-targeted fractional Kelly ---
+  let deployed = Object.values(bot.positions).reduce((a, p) => a + p.cost, 0);
+  const cands = live.map(computeAlpha)
+    .filter((c) => c.edge >= P.minEdge && c.p >= .1 && c.p <= .7 && !bot.positions[c.t])
     .sort((a, b) => b.edge - a.edge);
-  for (const c of cands) { if (Object.keys(bot.positions).length >= bot.params.maxPos) break;
-    const b = (1 - c.p) / c.p, fStar = Math.max(0, c.q - (1 - c.q) / b), f = Math.min(bot.params.maxPerTrade, bot.params.kelly * fStar);
-    const stake = Math.min(bot.cash, f * bot.bankroll); if (stake < 10) continue; botBuy(c, stake); }
+  for (const c of cands) {
+    if (Object.keys(bot.positions).length >= P.maxPos) break;
+    const b = (1 - c.p) / c.p, fStar = Math.max(0, c.q - (1 - c.q) / b);
+    const volScale = clamp(P.targetVol / Math.max(c.vol, 0.01), 0.3, 1);
+    const f = clamp(P.kelly * fStar * volScale, 0, P.maxPerTrade);
+    let stake = Math.min(f * bot.bankroll, bot.cash, P.maxGross * bot.bankroll - deployed);
+    if (stake < 10) continue;
+    botBuy(c, stake); deployed += stake;
+  }
   bot.equity.push({ t: now(), v: botValue() }); if (bot.equity.length > 400) bot.equity.shift();
   savePF(PF); renderAuto();
 }
@@ -706,13 +769,13 @@ async function autoPage() {
   const P = PF.bot.params;
   app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">AUTO-TRADE</span><h1>Let the <span class="accent">algorithm</span> trade for you.</h1><p>Fund the bot with paper cash. It scans <b>live</b> signals, estimates edge vs. the market price, sizes with fractional Kelly, and manages its own exits — fully automatic.</p></section>
     <section class="wrap" style="padding-bottom:70px"><div id="auto-root"></div>
-      <div class="panel" style="padding:24px;margin-top:26px"><h3 style="margin-bottom:14px">How the algorithm works</h3>
+      <div class="panel" style="padding:24px;margin-top:26px"><h3 style="margin-bottom:14px">The strategy — "PolyFlow Alpha"</h3>
         <div class="algo-steps">
-          <div><b>1 · Estimate edge</b><p class="muted">For each live signal it computes a fair probability q = price + 0.6·(confidence−0.5)·(1−price), then edge = q ÷ price − 1. It only acts when edge ≥ ${Math.round(P.minEdge * 100)}%.</p></div>
-          <div><b>2 · Size (fractional Kelly)</b><p class="muted">Stake = ${P.kelly}× Kelly fraction of the bankroll, capped at ${Math.round(P.maxPerTrade * 100)}% per trade and ${P.maxPos} open positions.</p></div>
-          <div><b>3 · Exit</b><p class="muted">Sells at the fair-value target, at +${Math.round(P.tp * 100)}% take-profit, or −${Math.round(P.sl * 100)}% stop-loss — automatically.</p></div>
+          <div><b>1 · Alpha (factor model)</b><p class="muted">A logistic model tilts the market price by a blend of factors — consensus agreement, backers' skill, capital size, and price <em>momentum</em> — to estimate a fair probability q. Edge = q ÷ price − 1; it acts only when edge ≥ ${Math.round(P.minEdge * 100)}%.</p></div>
+          <div><b>2 · Sizing (Kelly × vol-target)</b><p class="muted">${P.kelly}× fractional Kelly, scaled down in volatile markets to a ${Math.round(P.targetVol * 100)}% vol target. Capped at ${Math.round(P.maxPerTrade * 100)}%/trade, ${Math.round(P.maxGross * 100)}% gross exposure, ${P.maxPos} positions.</p></div>
+          <div><b>3 · Risk exits</b><p class="muted">Closes at the fair-value target, +${Math.round(P.tp * 100)}% take-profit, −${Math.round(P.sl * 100)}% stop-loss, or a ${Math.round(P.trail * 100)}% trailing stop that locks in momentum gains.</p></div>
         </div>
-        <p class="muted" style="font-size:.82rem;margin-top:14px">Paper only · trades exclusively the live signals · not financial advice.</p></div>
+        <p class="muted" style="font-size:.82rem;margin-top:14px">Logistic factor alpha + fractional-Kelly + volatility targeting + trailing stops — the toolkit of real stat-arb / CTA / Kelly-betting desks. Paper only · live signals only · not financial advice.</p></div>
     </section>`;
   renderAuto();
   pageTimers.push(setInterval(() => { if (PF.bot.enabled) evaluateBot(); }, 4000));
@@ -728,14 +791,25 @@ function renderAuto() {
       <div class="pf-card"><div class="k">Bot P&L</div><div class="v ${bpnl >= 0 ? "stat-pos" : "stat-neg"}">${money(bpnl)} ${bot.bankroll ? `(${(bpnl / bot.bankroll * 100).toFixed(1)}%)` : ""}</div></div>
       <div class="pf-card"><div class="k">Realized</div><div class="v ${bot.realized >= 0 ? "stat-pos" : "stat-neg"}">${money(bot.realized)}</div></div></div>
     <div class="panel" style="padding:20px;margin:18px 0">${controls}</div>
+    <div class="panel" style="padding:20px;margin-bottom:18px"><h3 style="margin-bottom:12px">Bot equity curve</h3><canvas id="bot-eq" style="width:100%;height:200px"></canvas></div>
     <div class="two-col">
       <div class="panel" style="padding:0;overflow:hidden"><div style="padding:16px 18px;font-weight:700">Bot positions</div><table class="data"><thead><tr><th>Market</th><th class="r">Entry</th><th class="r">Last</th><th class="r">Value</th><th class="r">P&L</th></tr></thead><tbody id="bot-pos"></tbody></table></div>
       <div class="panel" style="padding:16px 18px"><div style="font-weight:700;margin-bottom:10px">Decision log</div><div id="bot-log" class="bot-log"></div></div>
-    </div>`;
+    </div>
+    <div class="panel" style="margin-top:18px;padding:0;overflow:hidden"><div style="padding:16px 18px;font-weight:700">🏆 Traders who made the bot the most money</div>
+      <table class="data"><thead><tr><th>Trader</th><th class="r">Trades</th><th class="r">Win rate</th><th class="r">P&L generated</th></tr></thead><tbody id="bot-attr"></tbody></table></div>`;
   const bp = $("#bot-pos"), ent = Object.entries(bot.positions);
   bp.innerHTML = ent.length ? ent.map(([t, p]) => { const price = LP[t] ?? p.avg, val = p.shares * price, pl = val - p.cost;
     return `<tr><td>${esc((p.name || "").slice(0, 34))}</td><td class="r">${pctOf(p.avg)}¢</td><td class="r">${pctOf(price)}¢</td><td class="r">${money(val)}</td><td class="r ${pl >= 0 ? "stat-pos" : "stat-neg"}">${money(pl)}</td></tr>`; }).join("") : `<tr><td colspan="5" class="empty">${bot.enabled ? "Scanning live signals for edge…" : "No positions. Fund and start the bot."}</td></tr>`;
   $("#bot-log").innerHTML = bot.log.length ? bot.log.map((l) => `<div class="log-line"><span class="muted">${new Date(l.ts).toLocaleTimeString()}</span> ${esc(l.msg)}</div>`).join("") : `<div class="muted">No activity yet.</div>`;
+  // equity curve
+  requestAnimationFrame(() => drawEquity($("#bot-eq"), bot.equity.length ? bot.equity : [{ t: now(), v: bot.bankroll || 0 }], bot.bankroll || 0));
+  // trader attribution (realized closed trades + current unrealized on open positions)
+  const attr = {};
+  for (const [w, a] of Object.entries(bot.attribution)) attr[w] = { pnl: a.pnl, trades: a.trades, wins: a.wins, open: 0 };
+  for (const [t, p] of Object.entries(bot.positions)) { if (!p.lead) continue; const price = LP[t] ?? p.avg; const u = p.shares * price - p.cost; const a = attr[p.lead] || { pnl: 0, trades: 0, wins: 0, open: 0 }; a.pnl += u; a.open += 1; attr[p.lead] = a; }
+  const rows = Object.entries(attr).sort((a, b) => b[1].pnl - a[1].pnl).slice(0, 10);
+  $("#bot-attr").innerHTML = rows.length ? rows.map(([w, a], i) => `<tr><td><span class="rank ${i < 3 ? "g" : ""}">${i + 1}</span> <span class="wallet">${shortAddr(w)}</span></td><td class="r">${a.trades}${a.open ? ` <span class="muted">(+${a.open} open)</span>` : ""}</td><td class="r">${a.trades ? Math.round(a.wins / a.trades * 100) : 0}%</td><td class="r ${a.pnl >= 0 ? "stat-pos" : "stat-neg"}">${money(a.pnl)}</td></tr>`).join("") : `<tr><td colspan="4" class="empty">No attributed trades yet — the bot will fill this as it copies traders.</td></tr>`;
   $("#fund-btn")?.addEventListener("click", () => fundBot($("#fund-amt").value));
   $("#toggle-btn")?.addEventListener("click", () => { PF.bot.enabled = !PF.bot.enabled; savePF(PF); if (PF.bot.enabled) { toast("Bot started"); evaluateBot(); } else { toast("Bot stopped"); renderAuto(); } });
   $("#add-btn")?.addEventListener("click", () => fundBot(1000));
