@@ -214,12 +214,18 @@ def build_recommendations(
     positions_by_trader: dict[str, list[dict]],
     top_n: int,
     min_confidence: float,
+    min_price: float = 0.0,
+    max_price: float = 1.0,
 ) -> list[RecCandidate]:
     """Turn the top-ranked traders' books into per-market consensus calls.
 
     For each market, the outcome backed by the highest score-weighted capital
     wins. Confidence blends directional *agreement*, the supporters' average
     *skill score*, and the *size* of the consensus.
+
+    ``min_price``/``max_price`` bound the recommended outcome's market price so we
+    surface *actionable, higher-upside* positions (e.g. 20–65¢) rather than
+    near-certain 95–100¢ favorites that offer almost no reward.
     """
     score_map = {s.wallet: s.composite for s in scores}
     top_wallets = {s.wallet for s in scores[:top_n]}
@@ -265,6 +271,10 @@ def build_recommendations(
         confidence = 0.5 * agreement + 0.3 * avg_score + 0.2 * size_factor
 
         if confidence < min_confidence:
+            continue
+        # Risk band: skip near-certain favorites (tiny upside) and extreme longshots.
+        price = best["cur_price"] or (best["entry_num"] / (best["size_usd"] or _EPS))
+        if not (min_price <= price <= max_price):
             continue
         avg_entry = best["entry_num"] / (best["size_usd"] or _EPS)
         candidates.append(
@@ -346,6 +356,8 @@ async def run_scoring(session: AsyncSession, window: str = "all") -> dict[str, i
         positions_by_trader,
         top_n=settings.top_traders_for_recs,
         min_confidence=settings.min_confidence,
+        min_price=settings.rec_min_price,
+        max_price=settings.rec_max_price,
     )
     # Keep only markets we actually track (FK safety), then replace active recs.
     valid = {row[0] for row in (await session.execute(select(Market.condition_id))).all()}

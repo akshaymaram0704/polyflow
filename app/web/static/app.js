@@ -89,10 +89,10 @@ function drawSpark(c, arr) {
   const g = x.createLinearGradient(0, 0, 0, h); g.addColorStop(0, up ? "rgba(0,200,5,.28)" : "rgba(255,80,0,.28)"); g.addColorStop(1, "transparent"); x.fillStyle = g; x.fill();
   x.beginPath(); arr.forEach((v, i) => (i ? x.lineTo(X(i), Y(v)) : x.moveTo(X(i), Y(v)))); x.strokeStyle = up ? "#00C805" : "#FF5000"; x.lineWidth = 1.5; x.stroke();
 }
-function drawCandles(c, arr, entry) {
+function drawCandles(c, arr, entry, opts = {}) {
   if (!c || !arr || arr.length < 4) return; const H = c.clientHeight || 300; const { x, w, h } = setupCanvas(c, H);
-  const padR = 52, padB = 4, plotW = w - padR, plotH = h - padB;
-  const C = Math.min(44, Math.floor(arr.length / 3)), k = Math.max(1, Math.floor(arr.length / C)), candles = [];
+  const padR = 54, padB = 4, plotW = w - padR, plotH = h - padB;
+  const C = Math.min(46, Math.floor(arr.length / 3)), k = Math.max(1, Math.floor(arr.length / C)), candles = [];
   for (let i = 0; i < C; i++) { const seg = arr.slice(i * k, (i + 1) * k); if (!seg.length) continue; candles.push({ o: seg[0], c: seg[seg.length - 1], hi: Math.max(...seg), lo: Math.min(...seg) }); }
   let min = Math.min(...candles.map((c) => c.lo)), max = Math.max(...candles.map((c) => c.hi));
   if (entry) { min = Math.min(min, entry); max = Math.max(max, entry); }
@@ -103,6 +103,12 @@ function drawCandles(c, arr, entry) {
   const cw = plotW / candles.length, bw = Math.max(2, cw * .62);
   candles.forEach((cd, i) => { const cx = i * cw + cw / 2, up = cd.c >= cd.o, col = up ? "#00C805" : "#FF5000"; x.strokeStyle = col; x.fillStyle = col;
     x.beginPath(); x.moveTo(cx, Y(cd.hi)); x.lineTo(cx, Y(cd.lo)); x.stroke(); x.fillRect(cx - bw / 2, Math.min(Y(cd.o), Y(cd.c)), bw, Math.max(2, Math.abs(Y(cd.c) - Y(cd.o)))); });
+  // Moving-average overlay (technical touch).
+  if (opts.ma) {
+    const win = 5; x.strokeStyle = "#4f9dff"; x.lineWidth = 1.5; x.beginPath();
+    for (let i = 0; i < candles.length; i++) { const s = candles.slice(Math.max(0, i - win + 1), i + 1); const m = s.reduce((a, d) => a + d.c, 0) / s.length; const cx = i * cw + cw / 2; i ? x.lineTo(cx, Y(m)) : x.moveTo(cx, Y(m)); }
+    x.stroke();
+  }
   const last = arr[arr.length - 1], ly = Y(last), lastUp = candles[candles.length - 1].c >= candles[candles.length - 1].o;
   x.setLineDash([4, 4]); x.strokeStyle = "#9a9aa6"; x.beginPath(); x.moveTo(0, ly); x.lineTo(plotW, ly); x.stroke(); x.setLineDash([]);
   x.fillStyle = lastUp ? "#00C805" : "#FF5000"; x.fillRect(plotW, ly - 8, padR, 16); x.fillStyle = "#001a00"; x.font = "bold 10px 'JetBrains Mono'"; x.fillText(Math.round(last * 100) + "%", plotW + 6, ly + 3);
@@ -212,6 +218,8 @@ function tradeCard(r, cls = "reveal") {
   const win = 100 / (price || 0.5);
   const profit = win - 100;
   const side = yes ? "YES" : "NO";
+  const lead = r.rationale?.top_traders?.[0];
+  const leadLine = lead ? `<div class="lead-line">⧉ Lead trader <b>${shortAddr(lead.wallet)}</b> · skill ${Math.round((lead.score || 0) * 100)}</div>` : "";
   return `<article class="card trade-card ${cls}">
     <div class="card-head">
       <div><div class="card-kicker ${yes ? "yes" : "no"}">${yes ? "▲ BUY YES" : "▼ BUY NO"}</div>
@@ -220,7 +228,8 @@ function tradeCard(r, cls = "reveal") {
     </div>
     <p class="trade-plain"><b>${r.supporter_count} top traders</b> are backing <b class="${yes ? "cy" : "cn"}">${side}</b> with ${fmtUsd(r.consensus_size_usd)}. You profit if this resolves <b>${side}</b>.</p>
     <div class="trade-payout">Buy ${side} ≈ <b>${cents}¢</b> · $100 → <b>$${win.toFixed(0)}</b> if correct <span class="prof">(+$${profit.toFixed(0)})</span></div>
-    <a class="pill sm" href="#/trading">Paper-trade this →</a>
+    ${leadLine}
+    <a class="pill sm" href="#/trading?t=${esc(r.asset)}">Copy & paper-trade →</a>
   </article>`;
 }
 
@@ -286,7 +295,8 @@ const PF_KEY = "polyflow_pf_v1";
 function loadPF() { try { const p = JSON.parse(localStorage.getItem(PF_KEY)); if (p && p.positions) return p; } catch {} return { cash: 10000, start: 10000, positions: {} }; }
 function savePF(p) { localStorage.setItem(PF_KEY, JSON.stringify(p)); }
 let PF = loadPF();
-let instruments = [], tradeToken = null;
+let instruments = [], selToken = null, orderSide = "buy", curCat = "All";
+const traderAssets = {}; // wallet -> Set(asset) for copy-trade status
 
 function pfValue() { let inv = 0; for (const [t, p] of Object.entries(PF.positions)) inv += p.shares * (LP[t] ?? p.avg); return { invested: Object.values(PF.positions).reduce((a, p) => a + p.cost, 0), holdings: inv, total: PF.cash + inv }; }
 
@@ -294,14 +304,18 @@ async function tradingPage() {
   const [recs, markets] = await Promise.all([loadRecs(), loadMarkets()]);
   const byTok = {}; markets.forEach((m) => (m.clob_token_ids || []).forEach((t, i) => (byTok[String(t)] = { cat: m.category, price: +((m.outcome_prices || [])[i]) })));
   instruments = recs.slice(0, 40).map((r) => { const t = String(r.asset); const seed = r.current_price || byTok[t]?.price || .5;
-    if (LP[t] == null) LP[t] = seed; if (OPEN[t] == null) OPEN[t] = LP[t];
-    return { token: t, name: r.question || r.condition_id, outcome: r.outcome, dir: r.direction, conf: r.confidence, consensus: r.consensus_size_usd, cat: byTok[t]?.cat || "Other" }; });
-  instruments.forEach((x) => seedHist(x.token, LP[x.token] ?? .5));
-  const cats = ["All", ...[...new Set(instruments.map((i) => i.cat))].slice(0, 8)];
+    if (LP[t] == null) LP[t] = seed; if (OPEN[t] == null) OPEN[t] = LP[t]; seedHist(t, LP[t]);
+    const lead = r.rationale?.top_traders?.[0] || null;
+    return { token: t, name: r.question || r.condition_id, outcome: r.outcome, conf: r.confidence, consensus: r.consensus_size_usd, backers: r.supporter_count, cat: byTok[t]?.cat || "Other", lead }; });
+  const cats = ["All", ...[...new Set(instruments.map((i) => i.cat))].slice(0, 7)];
+  const q = new URLSearchParams((location.hash.split("?")[1]) || "");
+  const wanted = q.get("t");
+  selToken = wanted && instruments.some((i) => i.token === wanted) ? wanted : instruments[0]?.token;
+  orderSide = "buy"; curCat = "All";
 
   app().innerHTML = `
-  <section class="page-head wrap reveal" style="padding-bottom:8px"><span class="kicker">PAPER TERMINAL</span><h1>Trade the consensus, <span class="accent">risk-free</span>.</h1>
-    <p>Deposit virtual capital, buy the top calculated trades, and watch your money move in real time. No real funds — this is a live paper simulation.</p></section>
+  <section class="page-head wrap reveal" style="padding-bottom:8px"><span class="kicker">PAPER TERMINAL</span><h1>Trade like the <span class="accent">pros</span> — fake money, real prices.</h1>
+    <p>Copy the top traders' higher-upside positions, read the live chart, and manage your book like a real terminal. Nothing here uses real funds.</p></section>
   <section class="wrap" style="padding-bottom:80px">
     <div class="pf-bar reveal">
       <div class="pf-item"><div class="k">Portfolio value</div><div class="v" id="pf-value">$0.00</div></div>
@@ -309,148 +323,165 @@ async function tradingPage() {
       <div class="pf-item"><div class="k">Cash</div><div class="v" id="pf-cash">$0.00</div></div>
       <div class="pf-item"><div class="k">Invested</div><div class="v" id="pf-inv">$0.00</div></div>
       <div class="pf-item"><div class="k">Open positions</div><div class="v" id="pf-npos">0</div></div>
-      <div class="pf-actions"><button class="mini-btn" id="pf-deposit">+ Deposit</button><button class="mini-btn sell" id="pf-reset">Reset</button></div>
+      <div class="pf-actions"><button class="mini-btn" id="pf-deposit">+ $5k</button><button class="mini-btn sell" id="pf-reset">Reset</button></div>
     </div>
 
-    <h3 style="margin:10px 0 14px">Your positions</h3>
-    <div class="panel" style="margin-bottom:30px"><table class="data"><thead><tr><th>Market</th><th>Side</th><th class="r">Shares</th><th class="r hide">Avg</th><th class="r">Price</th><th class="r">Value</th><th class="r">P&L</th><th></th></tr></thead><tbody id="holdings"></tbody></table></div>
-
-    <h3 style="margin:0 0 14px">Top trades <span class="muted" style="font-family:var(--sans);font-size:.9rem;font-weight:400">— PolyFlow's calculated signals, live</span></h3>
-    <div class="tabs" id="cats">${cats.map((c, i) => `<button class="chip-btn ${i === 0 ? "on" : ""}" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div>
-    <div class="panel"><table class="data"><thead><tr><th>Market</th><th>Signal</th><th class="r">Price (Yes)</th><th class="r">24h</th><th class="hide">Chart</th><th class="r hide">Conf</th><th class="r">Your pos.</th><th></th></tr></thead><tbody id="insts"></tbody></table></div>
-    <p class="muted" style="font-size:.82rem;margin-top:10px">Tip: click any row to open its live chart.</p>
-
-    <div class="panel algo reveal" style="margin-top:34px;padding:28px">
-      <h3 style="margin-bottom:6px">How are the top trades calculated?</h3>
-      <p class="muted" style="margin-bottom:18px">Yes — it's a deterministic algorithm, not a black box. Two stages:</p>
-      <div class="two-col">
-        <div><div class="algo-step"><b>1 · Rank every trader</b><p class="muted">Each trader gets a composite score from four cohort-normalized dimensions: profitability (ROI + PnL), consistency (win-rate + Sharpe-like ratio), sizing discipline, and risk-adjusted return (Sortino + drawdown).</p></div></div>
-        <div><div class="algo-step"><b>2 · Aggregate the winners' capital</b><p class="muted">For each market, the top-ranked traders' positions are pooled per outcome, weighted by <em>trader score × capital</em>. The outcome with the most score-weighted money becomes the signal.</p></div></div>
+    <div class="terminal reveal">
+      <div class="watchlist">
+        <div class="wl-head"><span>Top trades</span><span class="muted" id="wl-count"></span></div>
+        <div class="tabs sm" id="cats">${cats.map((c, i) => `<button class="chip-btn ${i === 0 ? "on" : ""}" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+        <div class="wl-list" id="wl"></div>
       </div>
-      <div class="formula">confidence = 0.5 × agreement + 0.3 × avg&nbsp;trader&nbsp;score + 0.2 × consensus&nbsp;size</div>
-      <p class="muted" style="font-size:.85rem">Only signals above the confidence floor are shown. <a href="#/performance" style="color:var(--green)">See the backtested edge →</a></p>
+      <div class="chartcol">
+        <div class="chart-top" id="chart-top"></div>
+        <canvas id="mainChart" style="width:100%;height:340px"></canvas>
+        <div class="order" id="order"></div>
+      </div>
     </div>
+
+    <h3 style="margin:34px 0 14px">Your positions</h3>
+    <div class="panel"><table class="data"><thead><tr><th>Market</th><th>Side</th><th class="r">Shares</th><th class="r hide">Avg</th><th class="r">Last</th><th class="r">Value</th><th class="r">P&L</th><th>Copied trader</th><th></th></tr></thead><tbody id="pos"></tbody></table></div>
 
     <div class="two-col" style="margin-top:34px">
-      <div class="banner paper" style="margin:0"><i class="dot"></i><div><div class="b-title">How this works</div><p>Prices update live (WebSocket + simulated ticks). Buy a signal, and your position value & P&L move with the market — exactly like a real book, with virtual money.</p></div></div>
-      <div class="panel" style="padding:22px"><h3 style="margin-bottom:8px">Automated strategy (server)</h3><p class="muted" style="font-size:.88rem;margin-bottom:14px">PolyFlow can also auto-execute paper orders from its own risk engine.</p>
-        <div style="display:flex;gap:10px"><button class="mini-btn" id="srv-exec">Run server paper run</button><a class="mini-btn" href="#/performance" style="text-decoration:none">View edge</a></div>
-        <div id="srv-out" class="muted" style="font-size:.85rem;margin-top:12px"></div></div>
+      <div class="panel algo" style="padding:26px"><h3 style="margin-bottom:6px">How are these positions chosen?</h3>
+        <p class="muted" style="font-size:.9rem;margin-bottom:12px">PolyFlow ranks every trader (profit · consistency · sizing · risk), then for each market pools the top traders' bets weighted by <em>skill × money</em>. The side they back becomes the position. We only show <b>higher-upside</b> picks (≈15–65¢) — not near-certain favorites.</p>
+        <a class="mini-btn" href="#/performance" style="text-decoration:none">See the edge →</a></div>
+      <div class="panel" style="padding:22px"><h3 style="margin-bottom:8px">Copy trading</h3><p class="muted" style="font-size:.9rem;margin-bottom:12px">Each position is copied from a real top trader. In your positions table, the <b>Copied trader</b> column shows whether they're <span class="stat-pos">still holding</span> or have <span class="stat-neg">exited</span> — your cue to sell or hold.</p>
+        <button class="mini-btn" id="srv-exec">Run server auto-strategy</button><div id="srv-out" class="muted" style="font-size:.85rem;margin-top:10px"></div></div>
     </div>
-  </section>
+  </section>`;
 
-  <div class="modal-bg" id="ticket"><div class="modal">
-    <span class="close-x" id="tk-close">×</span>
-    <h3 id="tk-name">—</h3><div class="sub" id="tk-sub">—</div>
-    <div class="big-price" id="tk-price">—</div><div class="muted" id="tk-side">—</div>
-    <canvas id="tk-chart" style="width:100%;height:130px;margin:14px 0 4px"></canvas>
-    <div class="amt-row"><span>$</span><input id="tk-amt" type="number" min="1" value="500" /></div>
-    <div class="quick"><button class="chip-btn" data-q="100">$100</button><button class="chip-btn" data-q="500">$500</button><button class="chip-btn" data-q="1000">$1K</button><button class="chip-btn" data-q="max">Max</button></div>
-    <div class="preview"><span>Est. shares</span><b id="tk-shares">0</b></div>
-    <div class="preview"><span>Cash after</span><b id="tk-after">$0</b></div>
-    <div class="modal-actions"><button class="pill" id="tk-buy">Buy YES</button></div>
-  </div></div>`;
+  $$("#cats .chip-btn").forEach((b) => b.addEventListener("click", () => { $$("#cats .chip-btn").forEach((x) => x.classList.remove("on")); b.classList.add("on"); curCat = b.dataset.cat; renderWatchlist(); }));
+  $("#pf-reset").addEventListener("click", () => { if (confirm("Reset your paper portfolio to $10,000?")) { PF = { cash: 10000, start: 10000, positions: {} }; savePF(PF); renderWatchlist(); renderPositions(); renderOrder(); updateSummary(); toast("Portfolio reset to $10,000"); } });
+  $("#pf-deposit").addEventListener("click", () => { PF.cash += 5000; PF.start += 5000; savePF(PF); updateSummary(); renderOrder(); toast("Deposited $5,000 virtual cash"); });
+  $("#srv-exec").addEventListener("click", async (e) => { e.target.disabled = true; e.target.textContent = "Running…"; try { const r = await postJSON("/trading/execute"); const pnl = await getJSON("/trading/pnl?mode=paper").catch(() => ({})); $("#srv-out").innerHTML = r.enabled ? `Server placed <b style="color:var(--green)">${r.submitted}</b> order(s). Book PnL: ${money(pnl.total_pnl || 0)}.` : `Server auto-trading disabled (POLYFLOW_TRADING_ENABLED=false).`; } catch { $("#srv-out").textContent = "Server trading unavailable."; } e.target.disabled = false; e.target.textContent = "Run server auto-strategy"; });
 
-  // category filter
-  let cat = "All";
-  $$("#cats .chip-btn").forEach((b) => b.addEventListener("click", () => { $$("#cats .chip-btn").forEach((x) => x.classList.remove("on")); b.classList.add("on"); cat = b.dataset.cat; renderInsts(cat); }));
-  renderInsts("All");
-  renderHoldings();
-  updateSummary();
+  renderWatchlist(); selectToken(selToken); renderPositions(); updateSummary();
 
-  // buttons
-  $("#pf-reset").addEventListener("click", () => { if (confirm("Reset your paper portfolio to $10,000?")) { PF = { cash: 10000, start: 10000, positions: {} }; savePF(PF); renderInsts(cat); renderHoldings(); updateSummary(); toast("Portfolio reset to $10,000"); } });
-  $("#pf-deposit").addEventListener("click", () => { PF.cash += 5000; PF.start += 5000; savePF(PF); updateSummary(); toast("Deposited $5,000 virtual cash"); });
-  $("#srv-exec").addEventListener("click", async (e) => { e.target.disabled = true; e.target.textContent = "Running…"; try { const r = await postJSON("/trading/execute"); const pnl = await getJSON("/trading/pnl?mode=paper").catch(() => ({})); $("#srv-out").innerHTML = r.enabled ? `Server placed <b style="color:var(--green)">${r.submitted}</b> order(s), skipped ${r.skipped}. Book PnL: ${money(pnl.total_pnl || 0)}.` : `Server trading disabled (set POLYFLOW_TRADING_ENABLED=true).`; } catch { $("#srv-out").textContent = "Server trading unavailable."; } e.target.disabled = false; e.target.textContent = "Run server paper run"; });
-
-  // ticket
-  const tk = $("#ticket");
-  const closeTk = () => tk.classList.remove("show");
-  $("#tk-close").addEventListener("click", closeTk);
-  tk.addEventListener("click", (e) => { if (e.target === tk) closeTk(); });
-  $("#tk-amt").addEventListener("input", updateTicket);
-  $$("#ticket .quick .chip-btn").forEach((b) => b.addEventListener("click", () => { $("#tk-amt").value = b.dataset.q === "max" ? Math.floor(PF.cash) : b.dataset.q; updateTicket(); }));
-  $("#tk-buy").addEventListener("click", doBuy);
-
-  // live loop: WS updates LP; here we also simulate drift so money always moves
   pageTimers.push(setInterval(() => {
     instruments.forEach((x) => { const t = x.token; const base = LP[t] ?? .5; LP[t] = Math.max(.02, Math.min(.98, base * (1 + (Math.random() - .5) * .02))); pushHist(t); });
     Object.keys(PF.positions).forEach((t) => { if (LP[t] == null) LP[t] = PF.positions[t].avg; });
-    tickTerminal(); drawAllSparks(); redrawExpanded();
+    tickTerminal();
   }, 1300));
-  drawAllSparks();
 }
 
-let expandedToken = null;
-function renderInsts(cat) {
-  const tb = $("#insts"); if (!tb) return;
-  const list = instruments.filter((x) => cat === "All" || x.cat === cat);
-  tb.innerHTML = list.map((x) => { const yes = (x.outcome || "").toLowerCase() === "yes"; const p = LP[x.token] ?? .5; const open = OPEN[x.token] ?? p; const chg = ((p - open) / open) * 100;
-    const held = PF.positions[x.token];
-    return `<tr data-token="${x.token}" class="inst-row">
-      <td><div style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="tw" data-w="${esc(x.name)}">${esc(x.name)}</div><div class="muted" style="font-size:.72rem">${esc(x.cat)}</div></td>
-      <td><span class="tag ${yes ? "yes" : "no"}" style="font-size:.8rem">${yes ? "▲ YES" : "▼ NO"}</span></td>
-      <td class="r tprice" data-p>${pctOf(p)}%</td>
-      <td class="r chg ${chg >= 0 ? "up" : "down"}" data-chg>${chg >= 0 ? "+" : ""}${chg.toFixed(1)}%</td>
-      <td class="hide"><canvas class="spark" data-spark="${x.token}" style="width:88px;height:34px"></canvas></td>
-      <td class="r hide metric">${pctOf(x.conf)}%</td>
-      <td class="r pos-cell" data-pos>${held ? `<span class="pv">${money(held.shares * p)}</span>` : "—"}</td>
-      <td class="r">${held ? `<button class="mini-btn sell" data-sell="${x.token}">Sell</button>` : `<button class="mini-btn" data-buy="${x.token}">Trade</button>`}</td></tr>`; }).join("") || `<tr><td colspan="8" class="empty">No instruments in this category.</td></tr>`;
-  $$(".tw", tb).forEach((el) => bindTip(el, el.dataset.w));
-  $$("[data-buy]", tb).forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openTicket(b.dataset.buy); }));
-  $$("[data-sell]", tb).forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); sellAll(b.dataset.sell); }));
-  $$(".inst-row", tb).forEach((tr) => tr.addEventListener("click", () => toggleDetail(tr, tr.dataset.token)));
-  drawAllSparks();
-  if (expandedToken && list.some((x) => x.token === expandedToken)) { const tr = tb.querySelector(`tr[data-token="${expandedToken}"]`); if (tr) { const tok = expandedToken; expandedToken = null; toggleDetail(tr, tok); } }
+// ---- watchlist (left column) ----
+function renderWatchlist() {
+  const wl = $("#wl"); if (!wl) return;
+  const list = instruments.filter((x) => curCat === "All" || x.cat === curCat);
+  $("#wl-count").textContent = list.length + " markets";
+  wl.innerHTML = list.map((x) => {
+    const yes = (x.outcome || "").toLowerCase() === "yes"; const p = LP[x.token] ?? .5;
+    const open = OPEN[x.token] ?? p; const chg = ((p - open) / open) * 100;
+    const held = PF.positions[x.token] ? " held" : "";
+    return `<div class="wl-row${x.token === selToken ? " on" : ""}${held}" data-token="${x.token}">
+      <div class="wl-main"><div class="wl-name">${esc(x.name.slice(0, 46))}</div>
+        <div class="wl-sub"><span class="tag ${yes ? "yes" : "no"}">${yes ? "YES" : "NO"}</span> · ${x.cat}</div></div>
+      <div class="wl-px"><div class="tprice" data-wp>${pctOf(p)}%</div><div class="chg ${chg >= 0 ? "up" : "down"}" data-wc>${chg >= 0 ? "+" : ""}${chg.toFixed(1)}%</div></div></div>`;
+  }).join("") || `<div class="empty">No markets in this category.</div>`;
+  $$(".wl-row", wl).forEach((r) => r.addEventListener("click", () => selectToken(r.dataset.token)));
 }
 
-function toggleDetail(tr, token) {
-  const existing = tr.nextElementSibling;
-  $$(".detail-row").forEach((d) => d.remove());
-  if (expandedToken === token) { expandedToken = null; return; }
-  expandedToken = token;
-  const x = instruments.find((i) => i.token === token) || {}; const held = PF.positions[token];
-  const yes = (x.outcome || "").toLowerCase() === "yes"; const p = LP[token] ?? .5;
-  const dr = document.createElement("tr"); dr.className = "detail-row"; dr.dataset.detail = token;
-  dr.innerHTML = `<td colspan="8"><div class="chart-wrap">
-    <div class="chart-head"><div><div class="ch-name">${esc(x.name || token)}</div><div class="muted" style="font-size:.8rem">${esc(x.cat || "")} · <span class="tag ${yes ? "yes" : "no"}">${yes ? "BUY YES" : "BUY NO"}</span> · conf ${pctOf(x.conf)}%</div></div>
-      <div class="ch-price" data-chp>${pctOf(p)}%</div></div>
-    <canvas class="big-chart" data-bigchart="${token}" style="width:100%;height:300px"></canvas>
-    <div class="ch-stats" data-chstats></div>
-    <div class="ch-actions">${held ? `<button class="pill" data-buy2="${token}">Buy more</button><button class="pill red" data-sell2="${token}">Close position</button>` : `<button class="pill" data-buy2="${token}">Buy this signal</button>`}</div>
-  </div></td>`;
-  tr.after(dr);
-  $("[data-buy2]", dr)?.addEventListener("click", () => openTicket(token));
-  $("[data-sell2]", dr)?.addEventListener("click", () => sellAll(token));
-  renderDetailStats(token); redrawExpanded();
+// ---- chart + order (right column) ----
+function selectToken(token) {
+  if (!token) return; selToken = token;
+  $$("#wl .wl-row").forEach((r) => r.classList.toggle("on", r.dataset.token === token));
+  renderChartTop(); renderOrder(); redrawMain();
 }
 
-function renderDetailStats(token) {
-  const box = $(`.detail-row[data-detail="${token}"] [data-chstats]`); if (!box) return;
-  const held = PF.positions[token], p = LP[token] ?? .5;
-  if (held) { const val = held.shares * p, pnl = val - held.cost, pct = held.cost ? pnl / held.cost * 100 : 0;
-    box.innerHTML = `<div><span class="k">Your value</span><b>${money(val)}</b></div><div><span class="k">Entry</span><b>${pctOf(held.avg)}%</b></div><div><span class="k">Shares</span><b>${held.shares.toFixed(0)}</b></div><div><span class="k">P&L</span><b class="${pnl >= 0 ? "stat-pos" : "stat-neg"}">${money(pnl)} (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</b></div>`;
-  } else box.innerHTML = `<div><span class="k">No position</span><b>—</b></div><div><span class="k">Last</span><b>${pctOf(p)}% Yes</b></div>`;
-}
-function redrawExpanded() {
-  if (!expandedToken) return; const c = $(`canvas[data-bigchart="${expandedToken}"]`); if (!c) return;
-  drawCandles(c, HIST[expandedToken], PF.positions[expandedToken]?.avg);
-  const chp = $(`.detail-row[data-detail="${expandedToken}"] [data-chp]`); if (chp) chp.textContent = pctOf(LP[expandedToken] ?? .5) + "%";
-  renderDetailStats(expandedToken);
+function renderChartTop() {
+  const el = $("#chart-top"); const x = instruments.find((i) => i.token === selToken); if (!el || !x) return;
+  const yes = (x.outcome || "").toLowerCase() === "yes"; const p = LP[selToken] ?? .5;
+  const open = OPEN[selToken] ?? p; const chg = ((p - open) / open) * 100;
+  const arr = HIST[selToken] || [p]; const hi = Math.max(...arr), lo = Math.min(...arr);
+  const lead = x.lead ? `following <b>${shortAddr(x.lead.wallet)}</b> (score ${Math.round((x.lead.score || 0) * 100)})` : "";
+  el.innerHTML = `<div class="ct-l"><div class="ct-name">${esc(x.name)}</div>
+      <div class="ct-sub"><span class="tag ${yes ? "yes" : "no"}">${yes ? "▲ BUY YES" : "▼ BUY NO"}</span> · ${esc(x.cat)} · conf ${pctOf(x.conf)}% · ${x.backers} backers ${lead ? "· " + lead : ""}</div></div>
+    <div class="ct-r"><div class="ct-price" data-ctp>${pctOf(p)}%</div>
+      <div class="chg ${chg >= 0 ? "up" : "down"}" data-ctc>${chg >= 0 ? "+" : ""}${chg.toFixed(1)}%</div>
+      <div class="ct-hilo">H ${pctOf(hi)}% · L ${pctOf(lo)}%</div></div>`;
 }
 
-function renderHoldings() {
-  const tb = $("#holdings"); if (!tb) return;
+function redrawMain() {
+  const c = $("#mainChart"); if (!c || !selToken) return;
+  drawCandles(c, HIST[selToken], PF.positions[selToken]?.avg, { ma: true });
+}
+
+function renderOrder() {
+  const el = $("#order"); const x = instruments.find((i) => i.token === selToken); if (!el || !x) return;
+  const held = PF.positions[selToken]; const p = LP[selToken] ?? .5;
+  const sideBtns = `<div class="ord-side"><button class="ord-tab ${orderSide === "buy" ? "on" : ""}" data-side="buy">Buy</button><button class="ord-tab sell ${orderSide === "sell" ? "on" : ""}" data-side="sell" ${held ? "" : "disabled"}>Sell</button></div>`;
+  let body;
+  if (orderSide === "buy") {
+    body = `<div class="amt-row"><span>$</span><input id="o-amt" type="number" min="1" value="500"/></div>
+      <div class="quick">${[100, 500, 1000, "Max"].map((q) => `<button class="chip-btn" data-q="${q}">${q === "Max" ? "Max" : "$" + q}</button>`).join("")}</div>
+      <div class="preview"><span>Buy at</span><b>${pctOf(p)}¢</b></div>
+      <div class="preview"><span>Est. shares</span><b id="o-shares">0</b></div>
+      <div class="preview"><span>If it wins</span><b id="o-win" class="stat-pos">—</b></div>
+      <div class="preview"><span>Cash after</span><b id="o-after">—</b></div>
+      <button class="pill lg ord-go" id="o-buy">Buy ${(x.outcome || "").toUpperCase()}</button>
+      ${x.lead ? `<button class="mini-btn copy" id="o-copy">⧉ Copy ${shortAddr(x.lead.wallet)}'s exact trade</button>` : ""}`;
+  } else {
+    body = `<div class="quick">${["25%", "50%", "100%"].map((q) => `<button class="chip-btn" data-sq="${q}">${q}</button>`).join("")}</div>
+      <div class="preview"><span>You hold</span><b>${held ? held.shares.toFixed(0) + " sh · " + money(held.shares * p) : "—"}</b></div>
+      <div class="preview"><span>Sell price</span><b>${pctOf(p)}¢</b></div>
+      <div class="preview"><span>Est. proceeds</span><b id="o-proceeds">—</b></div>
+      <button class="pill lg red ord-go" id="o-sell">Sell selected</button>`;
+  }
+  el.innerHTML = `<div class="ord-head">Order ticket</div>${sideBtns}<div class="ord-body">${body}</div>`;
+  $$(".ord-tab", el).forEach((b) => b.addEventListener("click", () => { if (b.disabled) return; orderSide = b.dataset.side; renderOrder(); }));
+  if (orderSide === "buy") {
+    const amtEl = $("#o-amt"); let sellFrac = null;
+    const upd = () => { const amt = Math.max(0, +amtEl.value || 0); const shares = amt / p;
+      $("#o-shares").textContent = shares.toFixed(0);
+      $("#o-win").textContent = "+" + money(shares - amt) + " (" + Math.round((1 - p) / p * 100) + "%)";
+      $("#o-after").textContent = money(PF.cash - amt); $("#o-buy").disabled = amt <= 0 || amt > PF.cash; };
+    amtEl.addEventListener("input", upd);
+    $$(".quick .chip-btn", el).forEach((b) => b.addEventListener("click", () => { amtEl.value = b.dataset.q === "Max" ? Math.floor(PF.cash) : b.dataset.q; upd(); }));
+    $("#o-buy").addEventListener("click", () => buy(selToken, +amtEl.value || 0, x.lead?.wallet));
+    if ($("#o-copy")) $("#o-copy").addEventListener("click", () => buy(selToken, Math.min(500, Math.floor(PF.cash)), x.lead?.wallet, true));
+    upd();
+  } else {
+    let frac = 1;
+    const updS = () => { const sh = (held?.shares || 0) * frac; $("#o-proceeds").textContent = money(sh * p); };
+    $$(".quick .chip-btn", el).forEach((b) => b.addEventListener("click", () => { $$(".quick .chip-btn", el).forEach((z) => z.classList.remove("on")); b.classList.add("on"); frac = parseInt(b.dataset.sq) / 100; updS(); }));
+    $("#o-sell").addEventListener("click", () => sellFraction(selToken, frac));
+    updS();
+  }
+}
+
+// ---- positions table with copy-trade status ----
+function renderPositions() {
+  const tb = $("#pos"); if (!tb) return;
   const entries = Object.entries(PF.positions);
-  if (!entries.length) { tb.innerHTML = `<tr><td colspan="8" class="empty">No positions yet — buy a top trade below to start.</td></tr>`; return; }
-  tb.innerHTML = entries.map(([t, p]) => { const price = LP[t] ?? p.avg; const val = p.shares * price; const pnl = val - p.cost; const pct = p.cost ? (pnl / p.cost) * 100 : 0; const yes = (p.outcome || "").toLowerCase() === "yes";
-    return `<tr data-hold="${t}"><td><div style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}</div></td>
+  if (!entries.length) { tb.innerHTML = `<tr><td colspan="9" class="empty">No positions yet — pick a trade on the left and buy it.</td></tr>`; return; }
+  tb.innerHTML = entries.map(([t, p]) => { const price = LP[t] ?? p.avg; const val = p.shares * price; const pnl = val - p.cost; const pct = p.cost ? pnl / p.cost * 100 : 0; const yes = (p.outcome || "").toLowerCase() === "yes";
+    const copy = p.src ? `<span class="copytag" data-src="${p.src}" data-asset="${t}">checking ${shortAddr(p.src)}…</span>` : `<span class="muted">—</span>`;
+    return `<tr data-hold="${t}"><td><div style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}</div></td>
       <td><span class="tag ${yes ? "yes" : "no"}" style="font-size:.78rem">${yes ? "YES" : "NO"}</span></td>
       <td class="r">${p.shares.toFixed(0)}</td><td class="r hide">${p.avg.toFixed(2)}</td>
       <td class="r" data-hp>${pctOf(price)}%</td><td class="r" data-hv>${money(val)}</td>
       <td class="r ${pnl >= 0 ? "stat-pos" : "stat-neg"}" data-hpnl>${money(pnl)} <span style="font-size:.75rem">(${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</span></td>
-      <td class="r"><button class="mini-btn sell" data-sell="${t}">Close</button></td></tr>`; }).join("");
-  $$("[data-sell]", tb).forEach((b) => b.addEventListener("click", () => sellAll(b.dataset.sell)));
+      <td>${copy}</td>
+      <td class="r"><button class="mini-btn" data-view="${t}">Chart</button> <button class="mini-btn sell" data-close="${t}">Close</button></td></tr>`; }).join("");
+  $$("[data-close]", tb).forEach((b) => b.addEventListener("click", () => sellFraction(b.dataset.close, 1)));
+  $$("[data-view]", tb).forEach((b) => b.addEventListener("click", () => { selectToken(b.dataset.view); document.querySelector(".terminal")?.scrollIntoView({ behavior: "smooth" }); }));
+  updateCopyStatuses();
+}
+
+async function loadTraderAssets(wallet) {
+  if (traderAssets[wallet]) return traderAssets[wallet];
+  try { const t = await getJSON("/traders/" + wallet); traderAssets[wallet] = new Set((t.positions || []).map((p) => String(p.asset))); }
+  catch { traderAssets[wallet] = null; }
+  return traderAssets[wallet];
+}
+async function updateCopyStatuses() {
+  for (const tag of $$(".copytag")) {
+    const held = await loadTraderAssets(tag.dataset.src);
+    if (held == null) { tag.textContent = "trader n/a"; tag.className = "copytag muted"; continue; }
+    if (held.has(tag.dataset.asset)) { tag.innerHTML = `<span class="dot" style="width:6px;height:6px"></span> still holding`; tag.className = "copytag stat-pos"; }
+    else { tag.innerHTML = "⚠ exited — consider selling"; tag.className = "copytag stat-neg"; }
+  }
 }
 
 function updateSummary() {
@@ -462,46 +493,45 @@ function updateSummary() {
 }
 
 function tickTerminal() {
-  // update instrument rows in place
-  $$("#insts tr[data-token]").forEach((tr) => { const t = tr.dataset.token; const p = LP[t] ?? .5; const open = OPEN[t] ?? p; const chg = ((p - open) / open) * 100;
-    const pe = tr.querySelector("[data-p]"); if (pe) { pe.textContent = pctOf(p) + "%"; pe.classList.add("flash-cell"); setTimeout(() => pe.classList.remove("flash-cell"), 600); }
-    const ce = tr.querySelector("[data-chg]"); if (ce) { ce.textContent = (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%"; ce.className = "r chg " + (chg >= 0 ? "up" : "down"); }
-    const pc = tr.querySelector("[data-pos]"); const held = PF.positions[t]; if (pc && held) pc.innerHTML = `<span class="pv">${money(held.shares * p)}</span>`; });
-  // update holdings in place
-  $$("#holdings tr[data-hold]").forEach((tr) => { const t = tr.dataset.hold; const p = PF.positions[t]; if (!p) return; const price = LP[t] ?? p.avg; const val = p.shares * price; const pnl = val - p.cost; const pct = p.cost ? pnl / p.cost * 100 : 0;
+  // watchlist prices
+  $$("#wl .wl-row").forEach((r) => { const t = r.dataset.token; const p = LP[t] ?? .5; const open = OPEN[t] ?? p; const chg = ((p - open) / open) * 100;
+    const wp = r.querySelector("[data-wp]"); if (wp) wp.textContent = pctOf(p) + "%";
+    const wc = r.querySelector("[data-wc]"); if (wc) { wc.textContent = (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%"; wc.className = "chg " + (chg >= 0 ? "up" : "down"); } });
+  // chart header + main chart
+  if (selToken) {
+    const p = LP[selToken] ?? .5, open = OPEN[selToken] ?? p, chg = ((p - open) / open) * 100;
+    const ctp = $("[data-ctp]"); if (ctp) ctp.textContent = pctOf(p) + "%";
+    const ctc = $("[data-ctc]"); if (ctc) { ctc.textContent = (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%"; ctc.className = "chg " + (chg >= 0 ? "up" : "down"); }
+    redrawMain();
+  }
+  // positions in place
+  $$("#pos tr[data-hold]").forEach((tr) => { const t = tr.dataset.hold; const pos = PF.positions[t]; if (!pos) return; const price = LP[t] ?? pos.avg; const val = pos.shares * price; const pnl = val - pos.cost; const pct = pos.cost ? pnl / pos.cost * 100 : 0;
     tr.querySelector("[data-hp]").textContent = pctOf(price) + "%"; tr.querySelector("[data-hv]").textContent = money(val);
     const pe = tr.querySelector("[data-hpnl]"); pe.innerHTML = `${money(pnl)} <span style="font-size:.75rem">(${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</span>`; pe.className = "r " + (pnl >= 0 ? "stat-pos" : "stat-neg"); });
   updateSummary();
 }
 
-function openTicket(token) {
-  tradeToken = token; const x = instruments.find((i) => i.token === token); if (!x) return;
-  const yes = (x.outcome || "").toLowerCase() === "yes";
-  $("#tk-name").textContent = x.name.slice(0, 70); $("#tk-sub").textContent = x.cat;
-  $("#tk-side").innerHTML = `Signal: <span class="tag ${yes ? "yes" : "no"}">${yes ? "▲ BUY YES" : "▼ BUY NO"}</span> · conf ${pctOf(x.conf)}%`;
-  $("#tk-buy").textContent = yes ? "Buy YES" : "Buy NO"; $("#tk-buy").className = "pill" + (yes ? "" : " red");
-  $("#tk-amt").value = 500; updateTicket(); $("#ticket").classList.add("show");
-  seedHist(token, LP[token] ?? .5); requestAnimationFrame(() => drawSpark($("#tk-chart"), HIST[token]));
+function buy(token, amt, src, isCopy) {
+  const x = instruments.find((i) => i.token === token); if (!x) return;
+  amt = Math.max(0, +amt || 0); const p = LP[token] ?? .5;
+  if (amt <= 0 || amt > PF.cash) { toast("Not enough cash"); return; }
+  const shares = amt / p;
+  const pos = PF.positions[token] || { shares: 0, cost: 0, avg: p, name: x.name, outcome: x.outcome, src: src || null };
+  pos.shares += shares; pos.cost += amt; pos.avg = pos.cost / pos.shares; if (src) pos.src = src;
+  PF.positions[token] = pos; PF.cash -= amt; savePF(PF);
+  renderWatchlist(); selectToken(token); renderPositions(); updateSummary();
+  toast(isCopy ? `Copied ${shortAddr(src)} · bought ${shares.toFixed(0)} shares` : `Bought ${shares.toFixed(0)} shares for ${money(amt)}`);
 }
-function updateTicket() {
-  if (!tradeToken) return; const p = LP[tradeToken] ?? .5; const amt = Math.max(0, +$("#tk-amt").value || 0);
-  $("#tk-price").textContent = pctOf(p) + "% Yes";
-  $("#tk-shares").textContent = (amt / p).toFixed(0); $("#tk-after").textContent = money(PF.cash - amt);
-  $("#tk-buy").disabled = amt <= 0 || amt > PF.cash;
-}
-function doBuy() {
-  const x = instruments.find((i) => i.token === tradeToken); if (!x) return; const p = LP[tradeToken] ?? .5; const amt = +$("#tk-amt").value || 0;
-  if (amt <= 0 || amt > PF.cash) return;
-  const shares = amt / p; const pos = PF.positions[tradeToken] || { shares: 0, cost: 0, avg: p, name: x.name, outcome: x.outcome };
-  pos.shares += shares; pos.cost += amt; pos.avg = pos.cost / pos.shares; PF.positions[tradeToken] = pos; PF.cash -= amt; savePF(PF);
-  $("#ticket").classList.remove("show"); renderInsts($("#cats .chip-btn.on")?.dataset.cat || "All"); renderHoldings(); updateSummary();
-  toast(`Bought ${shares.toFixed(0)} shares for ${money(amt)}`);
-}
-function sellAll(token) {
-  const p = PF.positions[token]; if (!p) return; const price = LP[token] ?? p.avg; const proceeds = p.shares * price; const pnl = proceeds - p.cost;
-  PF.cash += proceeds; delete PF.positions[token]; savePF(PF);
-  renderInsts($("#cats .chip-btn.on")?.dataset.cat || "All"); renderHoldings(); updateSummary();
-  toast(`Closed position · ${pnl >= 0 ? "+" : ""}${money(pnl)}`);
+function sellFraction(token, frac) {
+  const pos = PF.positions[token]; if (!pos) return; frac = Math.min(1, Math.max(0, frac || 1));
+  const price = LP[token] ?? pos.avg; const sellSh = pos.shares * frac; const proceeds = sellSh * price;
+  const costPart = pos.cost * frac; const pnl = proceeds - costPart;
+  PF.cash += proceeds;
+  if (frac >= 0.999) delete PF.positions[token];
+  else { pos.shares -= sellSh; pos.cost -= costPart; }
+  savePF(PF);
+  renderWatchlist(); selectToken(token); renderPositions(); updateSummary();
+  toast(`Sold ${sellSh.toFixed(0)} shares · ${pnl >= 0 ? "+" : ""}${money(pnl)}`);
 }
 
 // ============================================================

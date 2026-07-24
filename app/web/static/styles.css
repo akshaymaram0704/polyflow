@@ -221,6 +221,47 @@ input { font-family: var(--sans); }
 .formula { font-family: var(--mono); font-size: .9rem; background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 12px; padding: 16px 18px; margin: 20px 0 14px; color: var(--green); text-align: center; }
 
+/* ---------- Webull-style terminal ---------- */
+.terminal { display: grid; grid-template-columns: 340px 1fr; gap: 18px; }
+.watchlist { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; max-height: 640px; }
+.wl-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; margin-bottom: 10px; }
+.tabs.sm { margin-bottom: 10px; } .tabs.sm .chip-btn { padding: 5px 11px; font-size: .78rem; }
+.wl-list { overflow-y: auto; flex: 1; margin: 0 -6px; }
+.wl-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 10px; cursor: pointer; border-left: 2px solid transparent; }
+.wl-row:hover { background: var(--panel-2); } .wl-row.on { background: var(--panel-2); border-left-color: var(--green); }
+.wl-row.held .wl-name::after { content: " ●"; color: var(--green); font-size: .7rem; }
+.wl-name { font-size: .86rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
+.wl-sub { font-size: .7rem; color: var(--muted); margin-top: 2px; } .wl-sub .tag { font-size: .68rem; }
+.wl-px { text-align: right; flex: none; } .wl-px .tprice { font-weight: 700; font-variant-numeric: tabular-nums; }
+.chartcol { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+.chart-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 10px; }
+.ct-name { font-family: var(--display); font-size: 1.15rem; font-weight: 600; line-height: 1.2; }
+.ct-sub { font-size: .78rem; color: var(--muted); margin-top: 4px; } .ct-sub .tag { font-size: .74rem; }
+.ct-sub b { color: var(--text); }
+.ct-r { text-align: right; flex: none; } .ct-price { font-size: 1.9rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ct-hilo { font-size: .72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+#mainChart { display: block; margin: 6px 0 14px; }
+.chg { font-variant-numeric: tabular-nums; font-size: .8rem; } .chg.up { color: var(--green); } .chg.down { color: var(--red); }
+.tprice { transition: color .25s; }
+/* order ticket */
+.order { border-top: 1px solid var(--border); padding-top: 16px; }
+.ord-head { font-weight: 700; margin-bottom: 12px; }
+.ord-side { display: flex; gap: 8px; margin-bottom: 14px; }
+.ord-tab { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); font-weight: 700; cursor: pointer; font-family: var(--sans); }
+.ord-tab.on { background: var(--green); color: #001a00; border-color: var(--green); }
+.ord-tab.sell.on { background: var(--red); color: #fff; border-color: var(--red); }
+.ord-tab:disabled { opacity: .4; cursor: not-allowed; }
+.ord-body .amt-row { display: flex; align-items: center; gap: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 10px; }
+.ord-body .amt-row span { color: var(--muted); font-size: 1.1rem; } .ord-body .amt-row input { flex: 1; background: transparent; border: none; color: var(--text); font-size: 1.3rem; font-weight: 700; outline: none; }
+.ord-body .quick { display: flex; gap: 8px; margin-bottom: 12px; } .ord-body .quick .chip-btn { flex: 1; }
+.ord-body .quick .chip-btn.on { background: var(--green); color: #001a00; border-color: var(--green); }
+.ord-body .preview { display: flex; justify-content: space-between; padding: 6px 0; color: var(--muted); font-size: .88rem; } .ord-body .preview b { color: var(--text); font-variant-numeric: tabular-nums; }
+.ord-go { width: 100%; justify-content: center; margin-top: 12px; }
+.mini-btn.copy { width: 100%; margin-top: 10px; }
+/* positions copy tag */
+.copytag { font-size: .8rem; display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.lead-line { font-size: .78rem; color: var(--muted); margin: 10px 0 2px; } .lead-line b { color: var(--text); }
+
 /* ---------- Modal (trade ticket) ---------- */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.62); backdrop-filter: blur(4px); z-index: 200; display: none; align-items: center; justify-content: center; padding: 20px; }
 .modal-bg.show { display: flex; }
@@ -273,7 +314,8 @@ footer { border-top: 1px solid var(--border); margin-top: 30px; }
   .hero-inner { grid-template-columns: 1fr; } .phone-stage { order: -1; }
   .steps, .explain, .perf-grid { grid-template-columns: repeat(2,1fr); }
   .stat-band { grid-template-columns: repeat(2,1fr); gap: 26px; }
-  .spotlight, .two-col { grid-template-columns: 1fr; }
+  .spotlight, .two-col, .terminal { grid-template-columns: 1fr; }
+  .watchlist { max-height: 380px; }
   .pf-bar { grid-template-columns: repeat(2,1fr); }
   .nav-links { display: none; } .foot { grid-template-columns: 1fr 1fr; } .data .hide { display: none; }
 }

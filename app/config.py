@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # Recommendations
     min_confidence: float = 0.6
     top_traders_for_recs: int = 100
+    # Risk band on the recommended outcome's price. Default targets higher-upside
+    # positions (no near-certain favorites). Set both to 0/1 to disable.
+    rec_min_price: float = 0.15
+    rec_max_price: float = 0.65
 
     # --- Trading (analytics stays read-only; execution is strictly opt-in) ---
     # Master kill-switch: no order is ever placed or recorded unless this is true.
