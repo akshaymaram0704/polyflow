@@ -159,7 +159,7 @@ class BasePolymarketClient:
 
     async def get_markets(
         self, limit: int = 500, active: bool = True, min_volume: float = 0.0,
-        order: str = "volumeNum", ascending: bool = False,
+        order: str = "volumeNum", ascending: bool = False, extra_params: dict | None = None,
     ) -> list[dict]:
         raise NotImplementedError
 
@@ -220,10 +220,12 @@ class LivePolymarketClient(BasePolymarketClient):
         min_volume: float = 0.0,
         order: str = "volumeNum",
         ascending: bool = False,
+        extra_params: dict | None = None,
     ) -> list[dict]:
         """Page through Gamma /markets. ``order``/``ascending`` control sorting —
         e.g. ``order='endDate', ascending=True`` surfaces soonest-resolving (live/
-        in-play) markets rather than the highest-volume ones."""
+        in-play) markets. ``extra_params`` passes Gamma filters like
+        ``end_date_max`` to restrict to markets ending soon."""
         collected: list[dict] = []
         offset, page = 0, min(limit, 100)
         while len(collected) < limit:
@@ -237,6 +239,8 @@ class LivePolymarketClient(BasePolymarketClient):
             }
             if min_volume:
                 params["volume_num_min"] = min_volume
+            if extra_params:
+                params.update(extra_params)
             batch = await self._get(f"{self.cfg.gamma_url}/markets", params)
             if not batch:
                 break

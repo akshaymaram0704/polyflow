@@ -33,7 +33,7 @@ async def list_markets(
 
 
 async def live_markets(
-    session: AsyncSession, *, limit: int = 400, window_hours: int = 8
+    session: AsyncSession, *, limit: int = 400, window_hours: int = 36
 ) -> list[Market]:
     """Markets for games happening *right now* / imminent — an in-play window.
 
@@ -44,6 +44,9 @@ async def live_markets(
     Falls back to top active markets when no end-dated markets exist (fixtures),
     so the page/bot still have something to work with.
     """
+    from app.logging import get_logger
+
+    log = get_logger(__name__)
     now = utcnow()
     stmt = (
         select(Market)
@@ -51,21 +54,38 @@ async def live_markets(
             Market.active.is_(True),
             Market.closed.is_(False),
             Market.end_date.is_not(None),
-            Market.end_date >= now - timedelta(hours=2),
+            Market.end_date >= now - timedelta(hours=3),
             Market.end_date <= now + timedelta(hours=window_hours),
         )
         .order_by(Market.end_date.asc())
         .limit(limit)
     )
     rows = list((await session.execute(stmt)).scalars())
+    log.info("live_markets: %d markets in the next %dh in-play window", len(rows), window_hours)
     if not rows:
+        # No in-play window hits — surface the soonest-resolving active markets so
+        # the page shows the nearest games rather than long-dated futures.
         stmt = (
             select(Market)
-            .where(Market.active.is_(True), or_(Market.closed.is_(False), Market.closed.is_(None)))
-            .order_by(Market.volume.desc())
+            .where(Market.active.is_(True), Market.end_date.is_not(None), Market.end_date >= now)
+            .order_by(Market.end_date.asc())
             .limit(limit)
         )
         rows = list((await session.execute(stmt)).scalars())
+        if not rows:  # last resort (e.g. fixtures with no dates)
+            rows = list(
+                (
+                    await session.execute(
+                        select(Market)
+                        .where(
+                            Market.active.is_(True),
+                            or_(Market.closed.is_(False), Market.closed.is_(None)),
+                        )
+                        .order_by(Market.volume.desc())
+                        .limit(limit)
+                    )
+                ).scalars()
+            )
     return rows
 
 

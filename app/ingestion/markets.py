@@ -87,16 +87,31 @@ async def sync_markets(session: AsyncSession, limit: int | None = None) -> list[
     fetch = min(limit * 6, 1200) if category else limit
     markets = await client.get_markets(limit=fetch, active=True)
 
-    # Also pull the soonest-resolving active markets — this is where live/in-play
-    # matches (e.g. a tennis match ending in an hour) live, regardless of volume.
-    try:
-        soon = await client.get_markets(
-            limit=min(fetch, 400), active=True, order="endDate", ascending=True
-        )
-        seen = {m.get("condition_id") for m in markets}
-        markets.extend(m for m in soon if m.get("condition_id") not in seen)
-    except Exception as exc:  # noqa: BLE001 - non-fatal; volume set still works
-        log.warning("soonest-resolving fetch failed: %s", exc)
+    # Also pull markets ending SOON (next ~2 days) — this is where live/in-play
+    # matches live, regardless of volume. Use Gamma's end-date filter directly.
+    from datetime import timedelta
+
+    from app.db.base import utcnow
+
+    n = utcnow()
+    soon_hi = (n + timedelta(days=2)).isoformat()
+    soon_lo = (n - timedelta(hours=6)).isoformat()
+    for keys in (
+        {"end_date_max": soon_hi, "end_date_min": soon_lo},
+        {"endDateMax": soon_hi},  # alternate param spelling
+    ):
+        try:
+            soon = await client.get_markets(
+                limit=min(fetch, 400), active=True, order="endDate",
+                ascending=True, extra_params=keys,
+            )
+            seen = {m.get("condition_id") for m in markets}
+            added = [m for m in soon if m.get("condition_id") not in seen]
+            markets.extend(added)
+            if added:
+                log.info("sync_markets: +%d soon-ending markets via %s", len(added), list(keys)[0])
+        except Exception as exc:  # noqa: BLE001 - non-fatal; volume set still works
+            log.warning("soon-ending fetch failed: %s", exc)
 
     if category:
         matched = [m for m in markets if matches_category(m, category)]
