@@ -59,11 +59,11 @@ class Settings(BaseSettings):
     w_risk_adjusted: float = 0.25
 
     # Recommendations
-    min_confidence: float = 0.6
-    top_traders_for_recs: int = 100
+    min_confidence: float = 0.52
+    top_traders_for_recs: int = 300
     # Risk band on the recommended outcome's price. Default targets higher-upside
     # positions (no near-certain favorites). Set both to 0/1 to disable.
-    rec_min_price: float = 0.15
+    rec_min_price: float = 0.12
     rec_max_price: float = 0.65
 
     # --- Trading (analytics stays read-only; execution is strictly opt-in) ---

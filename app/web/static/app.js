@@ -14,6 +14,17 @@ const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(+n || 0).toLocaleString("en
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pctOf = (v) => Math.round((+v || 0) * 100);
 const shortAddr = (w) => (w ? w.slice(0, 6) + "…" + w.slice(-4) : "—");
+const _LEAGUES = [["NBA", ["nba"]], ["NFL", ["nfl", "super bowl"]], ["NHL", ["nhl", "stanley cup"]],
+  ["MLB", ["mlb", "world series"]], ["Soccer", ["soccer", "premier league", "la liga", "uefa", "fifa",
+  "world cup", "champions league", "serie a", "bundesliga", "ligue 1", "mls", "epl"]],
+  ["UFC", ["ufc", "mma"]], ["Tennis", ["tennis", "atp", "wta", "wimbledon", "grand slam"]],
+  ["Golf", ["golf", "pga", "masters"]], ["Boxing", ["boxing", "heavyweight"]]];
+function leagueOf(q) {
+  const s = (q || "").toLowerCase();
+  for (const [name, keys] of _LEAGUES) if (keys.some((k) => s.includes(k))) return name;
+  if (s.includes(" vs ") || s.includes(" vs.") || s.includes(" @ ")) return "Match";
+  return "Other";
+}
 
 async function getJSON(u) { const r = await fetch(u); if (!r.ok) throw new Error(u + " → " + r.status); return r.json(); }
 async function postJSON(u) { const r = await fetch(u, { method: "POST" }); return r.json(); }
@@ -306,8 +317,10 @@ async function tradingPage() {
   instruments = recs.slice(0, 40).map((r) => { const t = String(r.asset); const seed = r.current_price || byTok[t]?.price || .5;
     if (LP[t] == null) LP[t] = seed; if (OPEN[t] == null) OPEN[t] = LP[t]; seedHist(t, LP[t]);
     const lead = r.rationale?.top_traders?.[0] || null;
-    return { token: t, name: r.question || r.condition_id, outcome: r.outcome, conf: r.confidence, consensus: r.consensus_size_usd, backers: r.supporter_count, cat: byTok[t]?.cat || "Other", lead }; });
-  const cats = ["All", ...[...new Set(instruments.map((i) => i.cat))].slice(0, 7)];
+    return { token: t, name: r.question || r.condition_id, outcome: r.outcome, conf: r.confidence, consensus: r.consensus_size_usd, backers: r.supporter_count, cat: leagueOf(r.question || ""), lead }; });
+  // Sport sub-tabs, most-populated first.
+  const counts = {}; instruments.forEach((i) => (counts[i.cat] = (counts[i.cat] || 0) + 1));
+  const cats = ["All", ...Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 7)];
   const q = new URLSearchParams((location.hash.split("?")[1]) || "");
   const wanted = q.get("t");
   selToken = wanted && instruments.some((i) => i.token === wanted) ? wanted : instruments[0]?.token;
@@ -426,7 +439,14 @@ function renderOrder() {
       <div class="preview"><span>You hold</span><b>${held ? held.shares.toFixed(0) + " sh · " + money(held.shares * p) : "—"}</b></div>
       <div class="preview"><span>Sell price</span><b>${pctOf(p)}¢</b></div>
       <div class="preview"><span>Est. proceeds</span><b id="o-proceeds">—</b></div>
-      <button class="pill lg red ord-go" id="o-sell">Sell selected</button>`;
+      <button class="pill lg red ord-go" id="o-sell">Sell selected</button>
+      <div class="alerts">
+        <div class="al-title">Exit alerts</div>
+        <div class="al-row"><label>🎯 Take-profit ¢</label><input id="al-tp" type="number" min="1" max="99" value="${held?.tp ? Math.round(held.tp * 100) : ""}" placeholder="e.g. 80"/></div>
+        <div class="al-row"><label>🛑 Stop-loss ¢</label><input id="al-sl" type="number" min="1" max="99" value="${held?.sl ? Math.round(held.sl * 100) : ""}" placeholder="e.g. 30"/></div>
+        <label class="al-auto"><input type="checkbox" id="al-auto" ${held?.auto ? "checked" : ""}/> Auto-close when hit</label>
+        <button class="mini-btn" id="al-save">Save alerts</button>
+      </div>`;
   }
   el.innerHTML = `<div class="ord-head">Order ticket</div>${sideBtns}<div class="ord-body">${body}</div>`;
   $$(".ord-tab", el).forEach((b) => b.addEventListener("click", () => { if (b.disabled) return; orderSide = b.dataset.side; renderOrder(); }));
@@ -446,6 +466,7 @@ function renderOrder() {
     const updS = () => { const sh = (held?.shares || 0) * frac; $("#o-proceeds").textContent = money(sh * p); };
     $$(".quick .chip-btn", el).forEach((b) => b.addEventListener("click", () => { $$(".quick .chip-btn", el).forEach((z) => z.classList.remove("on")); b.classList.add("on"); frac = parseInt(b.dataset.sq) / 100; updS(); }));
     $("#o-sell").addEventListener("click", () => sellFraction(selToken, frac));
+    $("#al-save")?.addEventListener("click", () => { const tp = +$("#al-tp").value, sl = +$("#al-sl").value; saveAlerts(selToken, tp ? tp / 100 : null, sl ? sl / 100 : null, $("#al-auto").checked); });
     updS();
   }
 }
@@ -508,6 +529,7 @@ function tickTerminal() {
   $$("#pos tr[data-hold]").forEach((tr) => { const t = tr.dataset.hold; const pos = PF.positions[t]; if (!pos) return; const price = LP[t] ?? pos.avg; const val = pos.shares * price; const pnl = val - pos.cost; const pct = pos.cost ? pnl / pos.cost * 100 : 0;
     tr.querySelector("[data-hp]").textContent = pctOf(price) + "%"; tr.querySelector("[data-hv]").textContent = money(val);
     const pe = tr.querySelector("[data-hpnl]"); pe.innerHTML = `${money(pnl)} <span style="font-size:.75rem">(${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</span>`; pe.className = "r " + (pnl >= 0 ? "stat-pos" : "stat-neg"); });
+  checkAlerts();
   updateSummary();
 }
 
@@ -532,6 +554,20 @@ function sellFraction(token, frac) {
   savePF(PF);
   renderWatchlist(); selectToken(token); renderPositions(); updateSummary();
   toast(`Sold ${sellSh.toFixed(0)} shares · ${pnl >= 0 ? "+" : ""}${money(pnl)}`);
+}
+
+function saveAlerts(token, tp, sl, auto) {
+  const pos = PF.positions[token]; if (!pos) return;
+  pos.tp = tp || null; pos.sl = sl || null; pos.auto = !!auto; pos._tp = false; pos._sl = false;
+  savePF(PF); renderPositions();
+  toast(`Alerts set${tp ? ` · TP ${Math.round(tp * 100)}¢` : ""}${sl ? ` · SL ${Math.round(sl * 100)}¢` : ""}`);
+}
+function checkAlerts() {
+  for (const [t, pos] of Object.entries(PF.positions)) {
+    const price = LP[t] ?? pos.avg;
+    if (pos.tp && price >= pos.tp && !pos._tp) { pos._tp = true; savePF(PF); toast(`🎯 Take-profit hit: ${pos.name.slice(0, 28)} @ ${pctOf(price)}¢`); if (pos.auto) { sellFraction(t, 1); return; } }
+    if (pos.sl && price <= pos.sl && !pos._sl) { pos._sl = true; savePF(PF); toast(`🛑 Stop-loss hit: ${pos.name.slice(0, 28)} @ ${pctOf(price)}¢`); if (pos.auto) { sellFraction(t, 1); return; } }
+  }
 }
 
 // ============================================================
