@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import timedelta
+
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache.redis import get_cache, price_key
 from app.clients.polymarket import get_client
+from app.db.base import utcnow
 from app.db.models import Market
 
 
@@ -27,6 +30,43 @@ async def list_markets(
     order_col = {"volume": Market.volume, "liquidity": Market.liquidity}.get(sort, Market.volume)
     stmt = stmt.order_by(order_col.desc()).limit(limit).offset(offset)
     return list((await session.execute(stmt)).scalars())
+
+
+async def live_markets(
+    session: AsyncSession, *, limit: int = 400, window_hours: int = 8
+) -> list[Market]:
+    """Markets for games happening *right now* / imminent — an in-play window.
+
+    A live sports market resolves right after the game ends, so we treat markets
+    whose ``end_date`` falls between ~2h ago (just finishing) and a few hours out
+    as "in progress / about to finish". Ordered by soonest to resolve.
+
+    Falls back to top active markets when no end-dated markets exist (fixtures),
+    so the page/bot still have something to work with.
+    """
+    now = utcnow()
+    stmt = (
+        select(Market)
+        .where(
+            Market.active.is_(True),
+            Market.closed.is_(False),
+            Market.end_date.is_not(None),
+            Market.end_date >= now - timedelta(hours=2),
+            Market.end_date <= now + timedelta(hours=window_hours),
+        )
+        .order_by(Market.end_date.asc())
+        .limit(limit)
+    )
+    rows = list((await session.execute(stmt)).scalars())
+    if not rows:
+        stmt = (
+            select(Market)
+            .where(Market.active.is_(True), or_(Market.closed.is_(False), Market.closed.is_(None)))
+            .order_by(Market.volume.desc())
+            .limit(limit)
+        )
+        rows = list((await session.execute(stmt)).scalars())
+    return rows
 
 
 async def get_market(session: AsyncSession, condition_id: str) -> Market | None:

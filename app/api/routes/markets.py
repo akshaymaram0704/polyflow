@@ -27,6 +27,16 @@ async def list_markets(
     return [MarketOut.model_validate(m) for m in rows]
 
 
+@router.get("/live", response_model=list[MarketOut])
+async def live_markets(
+    limit: int = Query(60, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+) -> list[MarketOut]:
+    """Markets for games in progress / about to finish (in-play window)."""
+    rows = await svc.live_markets(session, limit=limit)
+    return [MarketOut.model_validate(m) for m in rows]
+
+
 @router.get("/{condition_id}", response_model=MarketOut)
 async def get_market(condition_id: str, session: AsyncSession = Depends(get_session)) -> MarketOut:
     market = await svc.get_market(session, condition_id)
