@@ -304,14 +304,14 @@ async function marketsPage() {
 // ============================================================
 const PF_KEY = "polyflow_pf_v1";
 const BOT_DEFAULTS = {
-  minEdge: 0.03,     // minimum model edge to open
+  minEdge: 0.006,    // low floor → stays broadly active across live outcomes
   kelly: 0.5,        // fractional Kelly multiplier
   maxPerTrade: 0.02, // tiny per-position cap → wide diversification
   maxGross: 0.95,    // cap total deployed capital
   tp: 0.35,          // take-profit (+%)
   sl: 0.20,          // stop-loss (−%)
   trail: 0.15,       // trailing-stop giveback from peak
-  maxPos: 250,       // hundreds of concurrent live positions
+  maxPos: 300,       // hundreds of concurrent live positions
 };
 function loadPF() {
   let p; try { p = JSON.parse(localStorage.getItem(PF_KEY)); } catch {}
@@ -734,9 +734,11 @@ function shayFair(token, price) {
     const past = rec[Math.max(0, rec.length - 8)]; mom = clamp(((p - past) / (past || 1)) * 5, -1, 1);
   }
   const open = OPEN[token] ?? p; const line = clamp(((p - open) / (open || 1)) * 3, -1, 1);
-  const alpha = 0.7 * mom + 0.4 * line;          // momentum + line movement (self-derived)
+  // Mild value pull toward 50/50 (live games are uncertain) + momentum + line move.
+  const value = (0.5 - p) * 0.5;
+  const alpha = 1.1 * mom + 0.7 * line + value;
   const logit = Math.log(p / (1 - p));
-  const q = clamp(1 / (1 + Math.exp(-(logit + 0.45 * alpha))), .02, .98);
+  const q = clamp(1 / (1 + Math.exp(-(logit + 0.9 * alpha))), .02, .98);
   return { p, q, edge: q / p - 1, vol, mom, line };
 }
 function botBuy(c, stake) {
@@ -780,16 +782,16 @@ async function evaluateBot() {
   let deployed = Object.values(bot.positions).reduce((a, p) => a + p.cost, 0);
   const cands = uni.filter((u) => !bot.positions[u.token])
     .map((u) => ({ ...u, ...shayFair(u.token, LP[u.token] ?? u.price) }))
-    .filter((c) => c.edge >= P.minEdge && c.p >= .08 && c.p <= .92)
+    .filter((c) => c.edge >= P.minEdge && c.p >= .05 && c.p <= .95)
     .sort((a, b) => b.edge - a.edge);
-  const slice = Math.max(10, bot.bankroll / P.maxPos); // even, small slices
+  const slice = bot.bankroll / P.maxPos; // even, small slices → wide book
   let opened = 0, edgeSum = 0;
   for (const c of cands) {
     if (Object.keys(bot.positions).length >= P.maxPos || deployed >= P.maxGross * bot.bankroll) break;
     const b = (1 - c.p) / c.p, fStar = Math.max(0, c.q - (1 - c.q) / b);
     const kellyStake = clamp(P.kelly * fStar, 0, P.maxPerTrade) * bot.bankroll;
-    const stake = Math.min(Math.max(kellyStake, slice * 0.5), slice * 2, bot.cash, P.maxGross * bot.bankroll - deployed);
-    if (stake < 5) continue;
+    const stake = Math.min(Math.max(kellyStake, slice), slice * 1.5, bot.cash, P.maxGross * bot.bankroll - deployed);
+    if (stake < 2) continue;
     botBuy(c, stake); deployed += stake; opened++; edgeSum += c.edge;
   }
   bot.avgEdge = opened ? edgeSum / opened : (cands[0]?.edge || 0);
@@ -818,7 +820,7 @@ function renderAuto() {
   const posEnt = Object.entries(bot.positions);
   const deployed = posEnt.reduce((a, [, p]) => a + p.cost, 0);
   const controls = bot.bankroll <= 0
-    ? `<div class="fund-row"><div class="amt-row" style="max-width:240px;margin:0"><span>$</span><input id="fund-amt" type="number" value="2000" min="1"/></div><button class="pill" id="fund-btn">Fund ShayBot</button><span class="muted">Cash available: ${money(PF.cash)}</span></div>`
+    ? `<div class="fund-row"><div class="amt-row" style="max-width:240px;margin:0"><span>$</span><input id="fund-amt" type="number" value="5000" min="1"/></div><button class="pill" id="fund-btn">Fund ShayBot</button><span class="muted">Cash available: ${money(PF.cash)} · more bankroll = more concurrent positions</span></div>`
     : `<div class="fund-row"><button class="pill ${bot.enabled ? "red" : ""}" id="toggle-btn">${bot.enabled ? "⏸ Stop ShayBot" : "▶ Start ShayBot"}</button><button class="mini-btn" id="add-btn">+ $1k</button><button class="mini-btn sell" id="wd-btn">Withdraw all</button><span class="live-badge ${bot.enabled ? "" : "dim"}"><i></i>${bot.enabled ? "live · trading" : "paused"}</span></div>`;
   root.innerHTML = `<div class="pf-cards">
       <div class="pf-card"><div class="k">Allocated</div><div class="v">${money(bot.bankroll)}</div></div>
