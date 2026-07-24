@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import timedelta
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Market, Recommendation
+from app.db.base import utcnow
+from app.db.models import Market, Recommendation, Trade
 
 
 async def list_recommendations(
@@ -37,3 +40,32 @@ async def list_recommendations(
         data["question"] = question
         out.append(data)
     return out
+
+
+async def live_recommendations(
+    session: AsyncSession, *, limit: int = 50, window_minutes: int = 240
+) -> list[dict]:
+    """Recommendations on markets trading *right now* (recent trade activity first).
+
+    A market's recent trade count is a proxy for a live/in-play game. Falls back
+    to the strongest active recs when no recent trades are present (e.g. fixtures
+    whose synthetic trade timestamps are static).
+    """
+    cutoff = utcnow() - timedelta(minutes=window_minutes)
+    rows = (
+        await session.execute(
+            select(Trade.condition_id, func.count(Trade.id))
+            .where(Trade.timestamp.is_not(None), Trade.timestamp >= cutoff)
+            .group_by(Trade.condition_id)
+        )
+    ).all()
+    counts = {cid: n for cid, n in rows}
+
+    recs = await list_recommendations(session, limit=500)
+    for r in recs:
+        r["recent_trades"] = counts.get(r["condition_id"], 0)
+
+    live = [r for r in recs if r["recent_trades"] > 0]
+    src = live if live else recs  # fallback keeps the page useful offline
+    src.sort(key=lambda r: (r["recent_trades"], r["consensus_size_usd"]), reverse=True)
+    return src[:limit]

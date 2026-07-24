@@ -12,6 +12,16 @@ from app.services import recommendations as svc
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
 
+@router.get("/live", response_model=list[RecommendationOut])
+async def live_recommendations(
+    limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+) -> list[RecommendationOut]:
+    """Signals on markets trading right now (in-play), ranked by recent activity."""
+    rows = await svc.live_recommendations(session, limit=limit)
+    return [RecommendationOut(**r) for r in rows]
+
+
 @router.get("", response_model=list[RecommendationOut])
 async def list_recommendations(
     limit: int = Query(50, ge=1, le=500),

@@ -97,6 +97,7 @@ class RecommendationOut(ORMModel):
     status: str
     generated_at: datetime
     question: str | None = None
+    recent_trades: int = 0
 
 
 class HealthOut(BaseModel):

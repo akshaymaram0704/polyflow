@@ -303,9 +303,37 @@ async function marketsPage() {
 // TRADING TERMINAL (real-time paper portfolio)
 // ============================================================
 const PF_KEY = "polyflow_pf_v1";
-function loadPF() { try { const p = JSON.parse(localStorage.getItem(PF_KEY)); if (p && p.positions) return p; } catch {} return { cash: 10000, start: 10000, positions: {} }; }
+const BOT_DEFAULTS = { minEdge: 0.06, kelly: 0.3, maxPerTrade: 0.12, tp: 0.4, sl: 0.25, maxPos: 6 };
+function loadPF() {
+  let p; try { p = JSON.parse(localStorage.getItem(PF_KEY)); } catch {}
+  if (!p || !p.positions) p = { cash: 10000, start: 10000, positions: {} };
+  p.trades = p.trades || []; p.equity = p.equity || [];
+  p.bot = p.bot || { enabled: false, bankroll: 0, cash: 0, positions: {}, log: [], realized: 0, equity: [], params: { ...BOT_DEFAULTS } };
+  p.bot.params = { ...BOT_DEFAULTS, ...(p.bot.params || {}) };
+  return p;
+}
 function savePF(p) { localStorage.setItem(PF_KEY, JSON.stringify(p)); }
 let PF = loadPF();
+
+const now = () => Date.now();
+function logTrade(action, token, pos, shares, price, amount, pnl) {
+  PF.trades.push({ ts: now(), action, token, name: pos.name, outcome: pos.outcome, shares, price, amount, pnl: pnl ?? null });
+  if (PF.trades.length > 500) PF.trades.shift();
+}
+function snapshotEquity() { PF.equity.push({ t: now(), v: pfValue().total }); if (PF.equity.length > 600) PF.equity.shift(); }
+function drawEquity(canvas, series, base) {
+  if (!canvas) return; const H = canvas.clientHeight || 200; const { x, w, h } = setupCanvas(canvas, H);
+  const vals = series.map((s) => s.v); if (base != null) vals.push(base);
+  if (vals.length < 2) { x.clearRect(0, 0, w, h); x.fillStyle = "#63636e"; x.font = "13px Inter"; x.fillText("No history yet — make a trade to start your equity curve.", 12, h / 2); return; }
+  const min = Math.min(...vals), max = Math.max(...vals), rng = (max - min) || 1;
+  const X = (i) => (i / (series.length - 1)) * (w - 4) + 2, Y = (v) => h - ((v - min) / rng) * (h - 16) - 8;
+  const up = series[series.length - 1].v >= (base ?? series[0].v);
+  x.clearRect(0, 0, w, h);
+  if (base != null) { const by = Y(base); x.setLineDash([4, 4]); x.strokeStyle = "#3a3a42"; x.beginPath(); x.moveTo(0, by); x.lineTo(w, by); x.stroke(); x.setLineDash([]); }
+  x.beginPath(); x.moveTo(X(0), h); series.forEach((s, i) => x.lineTo(X(i), Y(s.v))); x.lineTo(X(series.length - 1), h); x.closePath();
+  const g = x.createLinearGradient(0, 0, 0, h); g.addColorStop(0, up ? "rgba(0,200,5,.22)" : "rgba(255,80,0,.22)"); g.addColorStop(1, "transparent"); x.fillStyle = g; x.fill();
+  x.beginPath(); series.forEach((s, i) => (i ? x.lineTo(X(i), Y(s.v)) : x.moveTo(X(i), Y(s.v)))); x.strokeStyle = up ? "#00C805" : "#FF5000"; x.lineWidth = 2; x.stroke();
+}
 let instruments = [], selToken = null, orderSide = "buy", curCat = "All";
 const traderAssets = {}; // wallet -> Set(asset) for copy-trade status
 
@@ -540,7 +568,8 @@ function buy(token, amt, src, isCopy) {
   const shares = amt / p;
   const pos = PF.positions[token] || { shares: 0, cost: 0, avg: p, name: x.name, outcome: x.outcome, src: src || null };
   pos.shares += shares; pos.cost += amt; pos.avg = pos.cost / pos.shares; if (src) pos.src = src;
-  PF.positions[token] = pos; PF.cash -= amt; savePF(PF);
+  PF.positions[token] = pos; PF.cash -= amt;
+  logTrade("BUY", token, pos, shares, p, amt); snapshotEquity(); savePF(PF);
   renderWatchlist(); selectToken(token); renderPositions(); updateSummary();
   toast(isCopy ? `Copied ${shortAddr(src)} · bought ${shares.toFixed(0)} shares` : `Bought ${shares.toFixed(0)} shares for ${money(amt)}`);
 }
@@ -549,9 +578,10 @@ function sellFraction(token, frac) {
   const price = LP[token] ?? pos.avg; const sellSh = pos.shares * frac; const proceeds = sellSh * price;
   const costPart = pos.cost * frac; const pnl = proceeds - costPart;
   PF.cash += proceeds;
+  logTrade("SELL", token, pos, sellSh, price, proceeds, pnl);
   if (frac >= 0.999) delete PF.positions[token];
   else { pos.shares -= sellSh; pos.cost -= costPart; }
-  savePF(PF);
+  snapshotEquity(); savePF(PF);
   renderWatchlist(); selectToken(token); renderPositions(); updateSummary();
   toast(`Sold ${sellSh.toFixed(0)} shares · ${pnl >= 0 ? "+" : ""}${money(pnl)}`);
 }
@@ -589,9 +619,133 @@ async function perfPage() {
 }
 
 // ============================================================
+// Live signals page
+// ============================================================
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function liveCard(r) {
+  const yes = (r.outcome || "").toLowerCase() === "yes"; const p = +(r.current_price || r.avg_entry_price || .5);
+  const cents = Math.round(p * 100), win = 100 / (p || .5);
+  const badge = r.recent_trades > 0 ? `<span class="live-badge"><i></i>LIVE · ${r.recent_trades} recent trades</span>` : `<span class="live-badge dim"><i></i>active</span>`;
+  return `<article class="card trade-card reveal">
+    <div class="card-head"><div>${badge}<div class="card-q" style="margin-top:8px">${esc((r.question || r.condition_id).slice(0, 92))}</div></div>${ring(r.confidence, 72, 7)}</div>
+    <div class="trade-payout">Buy <b>${yes ? "YES" : "NO"}</b> ≈ <b>${cents}¢</b> · $100 → <b>$${win.toFixed(0)}</b> if it hits <span class="prof">(+$${(win - 100).toFixed(0)})</span></div>
+    <a class="pill sm" href="#/trading?t=${esc(r.asset)}">Jump in →</a></article>`;
+}
+async function livePage() {
+  app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">LIVE NOW <i class="dot live"></i></span><h1>Games trading <span class="accent">right now</span>.</h1><p>Signals on the markets with the most live trading activity — jump in while the action is on. Auto-refreshes every 15s.</p></section>
+    <section class="wrap section" style="padding-top:16px"><div id="live-grid" class="grid"></div></section>`;
+  const grid = $("#live-grid");
+  const load = async () => {
+    const live = await getJSON("/recommendations/live?limit=36").catch(() => []);
+    live.forEach((r) => { const t = String(r.asset); if (LP[t] == null) LP[t] = +(r.current_price || .5); });
+    grid.innerHTML = live.length ? live.map(liveCard).join("") : `<p class="muted">No live signals right now — check back when games are on.</p>`;
+    animRings(grid); observeReveals(grid);
+  };
+  await load(); pageTimers.push(setInterval(load, 15000));
+}
+
+// ============================================================
+// Portfolio & history page
+// ============================================================
+async function portfolioPage() {
+  const v = pfValue(), pnl = v.total - PF.start;
+  const sells = PF.trades.filter((t) => t.action === "SELL"), wins = sells.filter((t) => t.pnl > 0).length;
+  const realized = sells.reduce((a, t) => a + (t.pnl || 0), 0);
+  app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">PORTFOLIO</span><h1>Your paper <span class="accent">account</span>.</h1><p>Equity curve, open positions, and every trade you've made.</p></section>
+    <section class="wrap" style="padding-bottom:70px">
+      <div class="pf-cards">
+        <div class="pf-card"><div class="k">Portfolio value</div><div class="v">${money(v.total)}</div></div>
+        <div class="pf-card"><div class="k">Total P&L</div><div class="v ${pnl >= 0 ? "stat-pos" : "stat-neg"}">${money(pnl)} (${PF.start ? (pnl / PF.start * 100).toFixed(1) : 0}%)</div></div>
+        <div class="pf-card"><div class="k">Realized P&L</div><div class="v ${realized >= 0 ? "stat-pos" : "stat-neg"}">${money(realized)}</div></div>
+        <div class="pf-card"><div class="k">Win rate</div><div class="v">${sells.length ? Math.round(wins / sells.length * 100) : 0}% <span class="muted" style="font-size:.8rem">(${sells.length})</span></div></div>
+      </div>
+      <div class="panel" style="padding:22px;margin:22px 0"><h3 style="margin-bottom:12px">Equity curve</h3><canvas id="eq" style="width:100%;height:220px"></canvas></div>
+      <h3 style="margin:0 0 12px">Open positions</h3>
+      <div class="panel" style="margin-bottom:26px"><table class="data"><thead><tr><th>Market</th><th>Side</th><th class="r">Shares</th><th class="r">Avg</th><th class="r">Last</th><th class="r">Value</th><th class="r">P&L</th></tr></thead><tbody id="pp"></tbody></table></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 12px"><h3>Trade history</h3><button class="mini-btn sell" id="clr">Clear history</button></div>
+      <div class="panel"><table class="data"><thead><tr><th>Time</th><th>Action</th><th>Market</th><th>Side</th><th class="r">Shares</th><th class="r">Price</th><th class="r">Amount</th><th class="r">P&L</th></tr></thead><tbody id="tl"></tbody></table></div>
+    </section>`;
+  const series = PF.equity.length ? PF.equity : [{ t: now(), v: PF.start }];
+  requestAnimationFrame(() => drawEquity($("#eq"), series, PF.start));
+  const pp = $("#pp"), ent = Object.entries(PF.positions);
+  pp.innerHTML = ent.length ? ent.map(([t, p]) => { const price = LP[t] ?? p.avg, val = p.shares * price, pl = val - p.cost, yes = (p.outcome || "").toLowerCase() === "yes";
+    return `<tr><td>${esc(p.name.slice(0, 42))}</td><td><span class="tag ${yes ? "yes" : "no"}" style="font-size:.76rem">${yes ? "YES" : "NO"}</span></td><td class="r">${p.shares.toFixed(0)}</td><td class="r">${pctOf(p.avg)}¢</td><td class="r">${pctOf(price)}¢</td><td class="r">${money(val)}</td><td class="r ${pl >= 0 ? "stat-pos" : "stat-neg"}">${money(pl)}</td></tr>`; }).join("") : `<tr><td colspan="7" class="empty">No open positions.</td></tr>`;
+  const tl = $("#tl");
+  tl.innerHTML = PF.trades.length ? [...PF.trades].reverse().slice(0, 100).map((t) => { const yes = (t.outcome || "").toLowerCase() === "yes";
+    return `<tr><td class="muted" style="font-size:.78rem">${new Date(t.ts).toLocaleString()}</td><td><span class="${t.action === "BUY" ? "stat-pos" : "stat-neg"}">${t.action}</span></td><td>${esc((t.name || "").slice(0, 34))}</td><td><span class="tag ${yes ? "yes" : "no"}" style="font-size:.72rem">${yes ? "YES" : "NO"}</span></td><td class="r">${(t.shares || 0).toFixed(0)}</td><td class="r">${pctOf(t.price)}¢</td><td class="r">${money(t.amount)}</td><td class="r ${t.pnl > 0 ? "stat-pos" : t.pnl < 0 ? "stat-neg" : ""}">${t.pnl != null ? money(t.pnl) : "—"}</td></tr>`; }).join("") : `<tr><td colspan="8" class="empty">No trades yet — start on the Trading or Auto page.</td></tr>`;
+  $("#clr").addEventListener("click", () => { if (confirm("Clear trade history & equity curve?")) { PF.trades = []; PF.equity = []; savePF(PF); portfolioPage(); } });
+}
+
+// ============================================================
+// Auto-trade page + quant bot
+// ============================================================
+function botValue() { let v = PF.bot.cash; for (const [t, p] of Object.entries(PF.bot.positions)) v += p.shares * (LP[t] ?? p.avg); return v; }
+function botLog(msg) { PF.bot.log.unshift({ ts: now(), msg }); if (PF.bot.log.length > 60) PF.bot.log.pop(); }
+function fundBot(amt) { amt = Math.min(PF.cash, Math.max(0, +amt || 0)); if (amt <= 0) return; PF.cash -= amt; PF.bot.cash += amt; PF.bot.bankroll += amt; savePF(PF); toast(`Funded bot with ${money(amt)}`); renderAuto(); }
+function withdrawBot() { for (const [t, p] of Object.entries(PF.bot.positions)) PF.bot.cash += p.shares * (LP[t] ?? p.avg); PF.bot.positions = {}; PF.cash += PF.bot.cash; PF.bot.cash = 0; PF.bot.bankroll = 0; PF.bot.enabled = false; savePF(PF); toast("Withdrew bot funds to cash"); renderAuto(); }
+function botBuy(c, stake) { const t = String(c.r.asset); const shares = stake / c.p; PF.bot.cash -= stake; PF.bot.positions[t] = { shares, cost: stake, avg: c.p, q: c.q, name: c.r.question || t, outcome: c.r.outcome }; botLog(`BUY ${(c.r.question || "").slice(0, 30)} @ ${pctOf(c.p)}¢ · edge +${Math.round(c.edge * 100)}% · ${money(stake)}`); }
+function botSell(t, reason) { const p = PF.bot.positions[t]; if (!p) return; const price = LP[t] ?? p.avg, proceeds = p.shares * price, pnl = proceeds - p.cost; PF.bot.cash += proceeds; PF.bot.realized += pnl; botLog(`SELL ${(p.name || "").slice(0, 30)} @ ${pctOf(price)}¢ · ${reason} · ${pnl >= 0 ? "+" : ""}${money(pnl)}`); delete PF.bot.positions[t]; }
+async function evaluateBot() {
+  const bot = PF.bot; if (!bot.enabled) return;
+  const live = await getJSON("/recommendations/live?limit=40").catch(() => []);
+  live.forEach((r) => { const t = String(r.asset); if (LP[t] == null) LP[t] = +(r.current_price || .5); });
+  [...Object.keys(bot.positions), ...live.map((r) => String(r.asset))].forEach((t) => { if (LP[t] != null) LP[t] = clamp(LP[t] * (1 + (Math.random() - .5) * .02), .02, .98); });
+  for (const [t, p] of Object.entries(bot.positions)) { const price = LP[t] ?? p.avg, pct = (price - p.avg) / p.avg;
+    if (price >= p.q) botSell(t, "target reached"); else if (pct >= bot.params.tp) botSell(t, "take-profit"); else if (pct <= -bot.params.sl) botSell(t, "stop-loss"); }
+  const cands = live.map((r) => { const p = clamp(+(r.current_price || .5), .02, .98); const q = clamp(p + .6 * (r.confidence - .5) * (1 - p), .02, .98); return { r, p, q, edge: q / p - 1 }; })
+    .filter((c) => c.edge >= bot.params.minEdge && c.p >= .1 && c.p <= .7 && !bot.positions[String(c.r.asset)])
+    .sort((a, b) => b.edge - a.edge);
+  for (const c of cands) { if (Object.keys(bot.positions).length >= bot.params.maxPos) break;
+    const b = (1 - c.p) / c.p, fStar = Math.max(0, c.q - (1 - c.q) / b), f = Math.min(bot.params.maxPerTrade, bot.params.kelly * fStar);
+    const stake = Math.min(bot.cash, f * bot.bankroll); if (stake < 10) continue; botBuy(c, stake); }
+  bot.equity.push({ t: now(), v: botValue() }); if (bot.equity.length > 400) bot.equity.shift();
+  savePF(PF); renderAuto();
+}
+async function autoPage() {
+  const P = PF.bot.params;
+  app().innerHTML = `<section class="page-head wrap reveal"><span class="kicker">AUTO-TRADE</span><h1>Let the <span class="accent">algorithm</span> trade for you.</h1><p>Fund the bot with paper cash. It scans <b>live</b> signals, estimates edge vs. the market price, sizes with fractional Kelly, and manages its own exits — fully automatic.</p></section>
+    <section class="wrap" style="padding-bottom:70px"><div id="auto-root"></div>
+      <div class="panel" style="padding:24px;margin-top:26px"><h3 style="margin-bottom:14px">How the algorithm works</h3>
+        <div class="algo-steps">
+          <div><b>1 · Estimate edge</b><p class="muted">For each live signal it computes a fair probability q = price + 0.6·(confidence−0.5)·(1−price), then edge = q ÷ price − 1. It only acts when edge ≥ ${Math.round(P.minEdge * 100)}%.</p></div>
+          <div><b>2 · Size (fractional Kelly)</b><p class="muted">Stake = ${P.kelly}× Kelly fraction of the bankroll, capped at ${Math.round(P.maxPerTrade * 100)}% per trade and ${P.maxPos} open positions.</p></div>
+          <div><b>3 · Exit</b><p class="muted">Sells at the fair-value target, at +${Math.round(P.tp * 100)}% take-profit, or −${Math.round(P.sl * 100)}% stop-loss — automatically.</p></div>
+        </div>
+        <p class="muted" style="font-size:.82rem;margin-top:14px">Paper only · trades exclusively the live signals · not financial advice.</p></div>
+    </section>`;
+  renderAuto();
+  pageTimers.push(setInterval(() => { if (PF.bot.enabled) evaluateBot(); }, 4000));
+}
+function renderAuto() {
+  const root = $("#auto-root"); if (!root) return; const bot = PF.bot, bv = botValue(), bpnl = bv - bot.bankroll;
+  const controls = bot.bankroll <= 0
+    ? `<div class="fund-row"><div class="amt-row" style="max-width:240px;margin:0"><span>$</span><input id="fund-amt" type="number" value="2000" min="1"/></div><button class="pill" id="fund-btn">Fund bot</button><span class="muted">Cash available: ${money(PF.cash)}</span></div>`
+    : `<div class="fund-row"><button class="pill ${bot.enabled ? "red" : ""}" id="toggle-btn">${bot.enabled ? "⏸ Stop bot" : "▶ Start bot"}</button><button class="mini-btn" id="add-btn">+ $1k</button><button class="mini-btn sell" id="wd-btn">Withdraw all</button><span class="live-badge ${bot.enabled ? "" : "dim"}"><i></i>${bot.enabled ? "running" : "paused"}</span></div>`;
+  root.innerHTML = `<div class="pf-cards">
+      <div class="pf-card"><div class="k">Allocated</div><div class="v">${money(bot.bankroll)}</div></div>
+      <div class="pf-card"><div class="k">Bot value</div><div class="v">${money(bv)}</div></div>
+      <div class="pf-card"><div class="k">Bot P&L</div><div class="v ${bpnl >= 0 ? "stat-pos" : "stat-neg"}">${money(bpnl)} ${bot.bankroll ? `(${(bpnl / bot.bankroll * 100).toFixed(1)}%)` : ""}</div></div>
+      <div class="pf-card"><div class="k">Realized</div><div class="v ${bot.realized >= 0 ? "stat-pos" : "stat-neg"}">${money(bot.realized)}</div></div></div>
+    <div class="panel" style="padding:20px;margin:18px 0">${controls}</div>
+    <div class="two-col">
+      <div class="panel" style="padding:0;overflow:hidden"><div style="padding:16px 18px;font-weight:700">Bot positions</div><table class="data"><thead><tr><th>Market</th><th class="r">Entry</th><th class="r">Last</th><th class="r">Value</th><th class="r">P&L</th></tr></thead><tbody id="bot-pos"></tbody></table></div>
+      <div class="panel" style="padding:16px 18px"><div style="font-weight:700;margin-bottom:10px">Decision log</div><div id="bot-log" class="bot-log"></div></div>
+    </div>`;
+  const bp = $("#bot-pos"), ent = Object.entries(bot.positions);
+  bp.innerHTML = ent.length ? ent.map(([t, p]) => { const price = LP[t] ?? p.avg, val = p.shares * price, pl = val - p.cost;
+    return `<tr><td>${esc((p.name || "").slice(0, 34))}</td><td class="r">${pctOf(p.avg)}¢</td><td class="r">${pctOf(price)}¢</td><td class="r">${money(val)}</td><td class="r ${pl >= 0 ? "stat-pos" : "stat-neg"}">${money(pl)}</td></tr>`; }).join("") : `<tr><td colspan="5" class="empty">${bot.enabled ? "Scanning live signals for edge…" : "No positions. Fund and start the bot."}</td></tr>`;
+  $("#bot-log").innerHTML = bot.log.length ? bot.log.map((l) => `<div class="log-line"><span class="muted">${new Date(l.ts).toLocaleTimeString()}</span> ${esc(l.msg)}</div>`).join("") : `<div class="muted">No activity yet.</div>`;
+  $("#fund-btn")?.addEventListener("click", () => fundBot($("#fund-amt").value));
+  $("#toggle-btn")?.addEventListener("click", () => { PF.bot.enabled = !PF.bot.enabled; savePF(PF); if (PF.bot.enabled) { toast("Bot started"); evaluateBot(); } else { toast("Bot stopped"); renderAuto(); } });
+  $("#add-btn")?.addEventListener("click", () => fundBot(1000));
+  $("#wd-btn")?.addEventListener("click", () => { if (confirm("Withdraw all bot funds and close its positions?")) withdrawBot(); });
+}
+
+// ============================================================
 // Router
 // ============================================================
-const routes = { "": homePage, signals: signalsPage, traders: tradersPage, markets: marketsPage, trading: tradingPage, performance: perfPage };
+const routes = { "": homePage, live: livePage, signals: signalsPage, traders: tradersPage, markets: marketsPage, trading: tradingPage, auto: autoPage, portfolio: portfolioPage, performance: perfPage };
 async function router() {
   clearTimers();
   const key = (location.hash.replace(/^#\/?/, "").split("?")[0]) || "";
